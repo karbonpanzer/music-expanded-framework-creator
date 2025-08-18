@@ -1,37 +1,167 @@
-# MEF Builder
+# MEF Builder (v2.7.4)
 
-A dark-mode, point-and-click tool to build and maintain **Music Expanded Framework (MEF)** music mods for RimWorld—without hand-editing XML.
+GUI tool to **author, preview, and export** RimWorld **Music Expanded Framework** (MEF) mods without hand-editing XML.  
+Builds correct **About**, **Defs/<Game>/tracks.xml**, **Defs/<Game>/theme.xml**, **Textures/UI/Icons**, and **Sounds/MusicExpanded/<Game>** structures, with live previews and guardrails.
 
-## What it does
-- **Real-time previews:** Live `tracks.xml` and `theme.xml` as you edit.
-- **Ambient by default:** Tracks start as Ambient; assign cues when needed.
-- **Cues & cueData:** MainMenu, Credits, Battle (auto-adds `<tense>true</tense>`), and **Custom** with `cueData`.
-- **Allowed biomes:** Tick vanilla biomes to emit `<allowedBiomes>…</allowedBiomes>`.
-- **Clean labels:** Auto-fill label from filename + global **Label Prefix** (e.g., `Fallout Sonora – Theme`).
-- **Track reuse:** One audio file can appear under multiple cues (separate `<defName>` entries).
-- **Multi-Def projects:** Manage multiple game “Defs” (e.g., FF7 + FF8) in one build.
-- **Icons:** Per-Def icon picker + base name editor for `<iconPath>UI/Icons/<name>` with live preview.
-- **Open & Overwrite:** Open an existing MEF mod, tweak cues/labels/icons, and overwrite just the XML.
-- **Safety rails:** Validates Name/Package ID/versions/icons/tracks; clear prompts before build/overwrite.
+> **Heads-up:** This app is a Python/Tkinter program. **You must have Python installed to run the `.py` script.**  
+> • **Windows/macOS:** install Python from https://www.python.org/ (Tkinter is bundled).  
+> • **Linux:** install `python3` **and** `python3-tk`.  
+> If you don’t want that, package it as a standalone **.exe** (see **Build a binary** below).
+
+---
+
+## Highlights
+
+- **End-to-end MEF authoring**
+  - **About.xml** editor (supports versions **1.3 → 2.0**; auto-maps dependency to `musicexpanded.framework` for <1.5 and `zal.mef` for ≥1.5).
+  - **Defs workspace** with multiple **Def**s per project (e.g., “FFVII”, “FFVIII”).
+  - **Live XML previews:** right-side tabs for `tracks.xml` and `theme.xml` update in real time.
+
+- **Track workflow built for speed**
+  - **Add files** or **Add folder** (recursive) for `.ogg`.
+  - Auto-fills **Label** from file name (cleaned); **Label Prefix** applies to all tracks in a Def.
+  - **Cue editor** with **Apply Cue** / **Remove Cue**, supports:
+    - Ambient (default for all tracks until changed)
+    - MainMenu, Credits
+    - BattleSmall, BattleMedium, BattleLarge, BattleLegendary (auto-adds `<tense>true</tense>`)
+    - Custom + **cueData** (base game & DLC events you specify)
+  - **Allowed Biomes** per-use (optional).
+
+- **Standards & structure baked in**
+  - `clipPath` uses `MusicExpanded/<GameFolder>/<NNN>. <Title>` (**no `.ogg`** suffix).
+  - Tracks grouped in this exact order with separators:
+    1) Ambient (No Cue)  
+    2) MainMenu & Credits  
+    3) Battle (Small/Medium/Large/Legendary)  
+    4) Custom Cues
+  - `theme.xml` lists Defs in the same grouped order and points `iconPath` to **UI/Icons/<IconName>**.
+
+- **Icons made simple**
+  - Per-Def **Icon name** (no `.png`) + **Browse** to select the PNG.
+  - Live icon preview; auto-copies to **Textures/UI/Icons/<IconName>.png** on build.
+
+- **Open & overwrite existing mods**
+  - Open an on-disk MEF mod → parse About, Defs, tracks/cues, icon name.
+  - **Overwrite** updates `tracks.xml` / `theme.xml` in-place (keeps audio & About).
+
+- **Project save/load**
+  - Save to a single `.mefproj` (JSON) and reopen later.
+
+- **Responsive UI**
+  - Panels stretch, editors and previews have scrollbars, works windowed or full-screen.
+
+- **Preflight checks**
+  - Before **Build** (export) or **Overwrite** (update opened mod), shows stats + issues and asks for confirmation.
+
+---
 
 ## Quick start
-1. **About:**  
-   - Name starts with `Music Expanded: `  
-   - Package ID starts with `musicexpanded.` (e.g., `musicexpanded.fallout`)  
-   - Select supported versions (1.3–2.0). Dependencies auto-mapped: `<1.5 → musicexpanded.framework`, `≥1.5 → zal.mef`.
-2. **Defs:**  
-   - Add a Def (game/collection).  
-   - Add `.ogg` files (files or folder).  
-   - Assign cues, optional `cueData`, allowed biomes, and per-track labels.
-3. **Icon:**  
-   - Select which Def to edit (dropdown).  
-   - Set icon base name and PNG file (preview shown).
 
-## Build vs Overwrite
-- **Build** (creates new mod folder; copies audio; writes About/Defs/Textures):
+1. **Run the app**
+   - Windows: `py -3w "MEF Creator.py"`
+   - macOS/Linux: `python3 "MEF Creator.py"`
+
+2. **About tab**
+   - **Name:** start with `Music Expanded: ` and finish it (required).
+   - **Package ID:** must start with `musicexpanded.` and include your suffix (required).
+   - Tick supported versions (1.3 → 2.0).
+   - (Optional) choose **Preview.png** and **modicon.png**.
+
+3. **Defs tab**
+   - **Add new Def…** (e.g., `Fallout Sonora`). Required before adding tracks.
+   - Set **Label Prefix** (defaults to the Def name).
+   - **Add files…** or **Add folder…** for `.ogg`.
+   - Select tracks → choose **Cue** (Ambient/Main/Credits/Battle/Custom) → **Apply Cue**.
+     - For **Custom**, fill **cueData**.
+     - Toggle **Allowed Biomes** if needed.
+     - To change back, use **Remove Cue**.
+   - Watch the right-side **tracks.xml/theme.xml** previews update.
+
+4. **Icon tab**
+   - Pick the **icon PNG** and set the **Icon name** (no `.png`). Preview confirms.
+
+5. **Build vs. Overwrite**
+   - **Build:** exports a self-contained mod folder (About, Defs, Sounds, Textures).
+   - **Overwrite:** when a mod is **opened**, updates only `tracks.xml` & `theme.xml`.
+
+---
+
+## Output layout
+
 ```text
-<YourMod>/
-  About/ (About.xml, Preview.png?, modicon.png?)
-  Defs/<Def>/(tracks.xml, theme.xml)
-  Sounds/MusicExpanded/<ContentFolder>/<NNN>. Title.ogg
-  Textures/UI/Icons/<iconBase>.png
+<MyChosenOutput><ModFolder>
+├─ About
+│  ├─ About.xml
+│  ├─ Preview.png (optional)
+│  └─ modicon.png (optional)
+├─ Defs
+│  └─ <DefFolder>
+│     ├─ tracks.xml
+│     └─ theme.xml
+├─ Sounds
+│  └─ MusicExpanded
+│     └─ <GameFolder>\   # 001. Title.ogg, 002. Title.ogg, ...
+└─ Textures
+   └─ UI
+      └─ Icons
+         └─ <IconName>.png
+```
+
+---
+
+## Build a binary (no Python required for end users)
+
+**PyInstaller** (recommended):
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+pip install --upgrade pip pyinstaller
+pyinstaller --onefile --windowed --icon app.ico "MEF Creator.py"
+```
+
+You'll get `dist\MEF Builder.exe`. Ship that file.
+
+**Nuitka** (optimized, slower build):
+
+```bat
+.venv\Scripts\activate
+pip install nuitka
+python -m nuitka "MEF Creator.py" --onefile --windows-console-mode=disable --enable-plugin=tk-inter --output-filename="MEF Builder.exe"
+```
+
+---
+
+## FAQ
+
+**The script won’t run.**  
+Install Python first — Windows/macOS installers from [python.org](https://www.python.org/) include Tkinter.  
+On Linux (Debian/Ubuntu and similar), install Tk bindings too:
+```bash
+sudo apt install python3 python3-tk
+```
+
+**MEF settings complain or my theme can’t be selected.**  
+Make sure each Def has an **icon** set. The builder copies it to:
+```
+Textures/UI/Icons/<IconName>.png
+```
+
+**Why do battle tracks feel different?**  
+Battle cues auto-add:
+```xml
+<tense>true</tense>
+```
+per MEF expectations.
+
+**Where is “ambient” in the XML?**  
+Ambient tracks **don’t** have a `<cue>` tag. The UI shows **Ambient** so it’s clear the track is used.
+
+---
+
+## Credits & links
+
+- **Framework:** https://github.com/Music-Expanded/music-expanded-framework  
+- **Author:** karbonpanzer  
+- **This tool:** MEF Builder (v2.7.4)
+  
