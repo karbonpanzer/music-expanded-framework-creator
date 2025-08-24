@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # mef_builder_gui_v3_2_0.py
 #
-# v3.2.0 — “Everything we talked about” merge
+# v3.2.0 — “Everything we talked about” merge (iconPath REQUIRED)
 # - Tabs: About, Theme (incl. Def controls), Track.xml, Build
 # - One live preview per page (Theme→theme.xml, Track→tracks.xml)
 # - Track editor reflowed: never cuts off; tall, single-column Allowed Biomes
@@ -14,6 +14,8 @@
 # - Label Prefix optional; Track Label edits apply immediately; automatic defNames
 # - No Icon page; no clone/move-up/move-down; patches ignored
 # - Dependencies switch to zal.mef for >= 1.5
+# - THEME ICON: iconPath is REQUIRED; Theme tab has relative path + PNG picker.
+#   Build copies PNG to Textures/<iconPath>.png. Import resolves existing icon.
 
 import re, shutil, webbrowser, os, json, subprocess, sys, math
 from pathlib import Path
@@ -115,6 +117,9 @@ class ProjectDef:
 		self.theme_description = f"{label_game} music integrated via the Music Expanded Framework."
 		self.tracks: list[Track] = []
 		self._src_def_dir: Path|None = None
+		# REQUIRED Theme icon config
+		self.icon_rel = f'UI/Icons/{self.content_folder or "Game"}'  # relative path (no .png)
+		self.icon_src: Path|None = None  # source PNG (optional, but path is always written)
 
 # ---------------- XML builders ----------------
 def build_about_xml(name, description_cdata, author, package_id, versions_lines, load_after_lines):
@@ -231,11 +236,15 @@ def build_theme_xml(project_def: ProjectDef):
 		for _use in t.uses:
 			defnames.append(next(gen))
 
+	# REQUIRED iconPath (never missing)
+	icon_rel = (project_def.icon_rel or "").strip() or f'UI/Icons/{project_def.content_folder or "Game"}'
+
 	lines = ['<?xml version="1.0" encoding="utf-8"?>', '<Defs>']
 	lines.append('\t<MusicExpanded.ThemeDef>')
 	lines.append(f'\t\t<defName>ME_{project_def.game_code}</defName>')
 	lines.append(f'\t\t<label>Music Expanded: {project_def.label_game}</label>')
 	lines.append(f'\t\t<description>{project_def.theme_description}</description>')
+	lines.append(f'\t\t<iconPath>{icon_rel}</iconPath>')
 	lines.append('\t\t<tracks>')
 	lines.append('\t\t\t<!-- tracks listed in the same sequence as tracks.xml -->')
 	for dn in defnames:
@@ -350,6 +359,10 @@ def parse_theme_xml_root(root, into_pd: ProjectDef):
 	desc_node = td.find("description")
 	if desc_node is not None and desc_node.text is not None:
 		into_pd.theme_description = desc_node.text
+	# REQUIRED: iconPath presence
+	icon_node = td.find("iconPath")
+	if icon_node is not None and icon_node.text:
+		into_pd.icon_rel = icon_node.text.strip()
 	return True
 
 def parse_def_folder(def_folder: Path) -> ProjectDef|None:
@@ -392,6 +405,9 @@ class App(tk.Tk):
 
 		# Output
 		self.out_root = tk.StringVar(value=str(Path.cwd() / "out"))
+
+		# Theme icon (bound to current def)
+		self.icon_rel_var = tk.StringVar(value="")
 
 		# track/theme text widgets for palette/auto-size
 		self._tk_texts: list[tk.Text] = []
@@ -526,7 +542,7 @@ class App(tk.Tk):
 		# Left column: def controls + fields + description
 		left = ttk.Frame(tab); left.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0,8))
 		for c in (1,3,5,7): left.columnconfigure(c, weight=1)
-		left.rowconfigure(5, weight=1)
+		left.rowconfigure(6, weight=1)  # shifted down by 1 row to accommodate icon row
 
 		# Def management
 		h = ttk.Frame(left); h.grid(row=0, column=0, columnspan=8, sticky="ew", pady=(0,6))
@@ -554,13 +570,19 @@ class App(tk.Tk):
 		ttk.Entry(left, textvariable=self.content_folder).grid(row=2, column=5, sticky="ew", padx=6)
 		ttk.Label(left, text="Label Prefix (optional):").grid(row=2, column=6, sticky="w")
 		ttk.Entry(left, textvariable=self.label_prefix).grid(row=2, column=7, sticky="ew", padx=6)
-		for var in (self.game_label, self.game_code, self.content_folder, self.label_prefix):
+
+		# REQUIRED icon path + picker
+		ttk.Label(left, text="Theme icon (relative, no .png):").grid(row=3, column=0, sticky="w", pady=(6,0))
+		ttk.Entry(left, textvariable=self.icon_rel_var).grid(row=3, column=1, columnspan=5, sticky="ew", padx=6, pady=(6,0))
+		ttk.Button(left, text="Choose PNG…", command=self._pick_theme_icon).grid(row=3, column=6, columnspan=2, sticky="e", pady=(6,0))
+
+		for var in (self.game_label, self.game_code, self.content_folder, self.label_prefix, self.icon_rel_var):
 			var.trace_add("write", self._on_core_changed)
 
-		# Theme description
-		ttk.Label(left, text="Theme description:").grid(row=3, column=0, columnspan=8, sticky="w", pady=(6,2))
+		# Theme description (shifted down one row)
+		ttk.Label(left, text="Theme description:").grid(row=4, column=0, columnspan=8, sticky="w", pady=(6,2))
 		self.theme_desc_txt = tk.Text(left, height=10, wrap="word")
-		self.theme_desc_txt.grid(row=4, column=0, columnspan=8, sticky="nsew")
+		self.theme_desc_txt.grid(row=5, column=0, columnspan=8, sticky="nsew")
 		self._track_text(self.theme_desc_txt)
 		self._auto_grow(self.theme_desc_txt, min_rows=6, max_rows=20)
 
@@ -770,10 +792,12 @@ class App(tk.Tk):
 			self.game_code.set(d.game_code)
 			self.content_folder.set(d.content_folder)
 			self.label_prefix.set(d.label_prefix)
+			self.icon_rel_var.set(d.icon_rel or f'UI/Icons/{d.content_folder or "Game"}')
 			self.theme_desc_txt.delete("1.0","end"); self.theme_desc_txt.insert("1.0", d.theme_description)
 			self.def_folder_lbl.configure(text=f"Def folder: {d._src_def_dir}" if d._src_def_dir else "Def folder: (new/not from disk)")
 		else:
 			self.game_label.set(""); self.game_code.set(""); self.content_folder.set(""); self.label_prefix.set("")
+			self.icon_rel_var.set("")
 			self.theme_desc_txt.delete("1.0","end"); self.def_folder_lbl.configure(text="Def folder: (none)")
 
 		self._refresh_tracks_table(); self._refresh_previews()
@@ -823,6 +847,9 @@ class App(tk.Tk):
 		d.label_game = name
 		if not d.game_code: d.game_code = infer_game_code(name)
 		if not d.content_folder: d.content_folder = sanitize_simple(name)
+		# If icon empty, suggest based on new name
+		if not (d.icon_rel or "").strip():
+			d.icon_rel = f'UI/Icons/{sanitize_simple(d.label_game) or d.content_folder or "Game"}'
 		self._refresh_all_def_controls()
 
 	def _delete_def(self):
@@ -842,6 +869,8 @@ class App(tk.Tk):
 		d.content_folder = self.content_folder.get().strip() or d.content_folder
 		d.label_prefix = self.label_prefix.get()
 		d.theme_description = self.theme_desc_txt.get("1.0","end").strip() or d.theme_description
+		# REQUIRED: always maintain a non-empty icon_rel
+		d.icon_rel = (self.icon_rel_var.get().strip() or f'UI/Icons/{sanitize_simple(d.label_game) or d.content_folder or "Game"}')
 		self._refresh_previews()
 
 	# ---------- Tracks
@@ -1035,6 +1064,8 @@ class App(tk.Tk):
 				"content_folder": d.content_folder,
 				"label_prefix": d.label_prefix,
 				"theme_description": d.theme_description,
+				"icon_rel": d.icon_rel,
+				"icon_src": (str(d.icon_src) if d.icon_src else ""),
 				"tracks": [{
 					"idx": t.idx,
 					"path": str(t.path),
@@ -1066,6 +1097,9 @@ class App(tk.Tk):
 			pd.content_folder = d.get("content_folder", pd.content_folder)
 			pd.label_prefix = d.get("label_prefix","")
 			pd.theme_description = d.get("theme_description", pd.theme_description)
+			pd.icon_rel = d.get("icon_rel", pd.icon_rel)
+			icon_src_s = d.get("icon_src","")
+			pd.icon_src = Path(icon_src_s) if icon_src_s else None
 			for t in d.get("tracks", []):
 				tr = Track(t["idx"], Path(t["path"]), t["display_title"], t["file_title"])
 				tr.uses = [TrackUse(u.get("cue_type"), u.get("cue_data",""), u.get("allowed_biomes",[])) for u in t.get("uses",[])]
@@ -1102,6 +1136,7 @@ class App(tk.Tk):
 		self.load_after_txt.delete("1.0","end"); self.load_after_txt.insert("1.0", self.about_load_after_default)
 		self.desc_txt.delete("1.0","end"); self.desc_txt.insert("1.0", "Put your About description here (wrapped in CDATA).")
 		self.preview_src.set(""); self.modicon_src.set("")
+		self.icon_rel_var.set("")
 		self._refresh_all_def_controls()
 
 	def _open_mod_folder(self):
@@ -1133,6 +1168,15 @@ class App(tk.Tk):
 			messagebox.showerror(APP_TITLE, "No valid Defs found (need Defs/<Something>/tracks.xml + theme.xml)."); return
 
 		self.defs = new_defs; self.cur_def_idx.set(0); self.loaded_mod_dir = mod
+
+		# Try to resolve icon PNGs for imported defs
+		textures_dir = self.loaded_mod_dir / "Textures"
+		for pd in self.defs:
+			if pd.icon_rel:
+				icon_candidate = textures_dir / (pd.icon_rel + ".png")
+				if icon_candidate.exists():
+					pd.icon_src = icon_candidate
+
 		self._refresh_all_def_controls()
 		self._update_toolbar_states()
 		messagebox.showinfo(APP_TITLE, f"Loaded {len(self.defs)} def(s) from:\n{mod}")
@@ -1150,6 +1194,9 @@ class App(tk.Tk):
 		if not self.defs: issues.append("No Defs created.")
 		for d in self.defs:
 			if not d.tracks: issues.append(f"Def '{d.label_game}': no tracks.")
+			# iconPath is always written; warn if no PNG is staged
+			if not d.icon_src:
+				issues.append(f"Def '{d.label_game}': icon PNG not selected; ensure Textures/{d.icon_rel}.png exists.")
 		if issues:
 			return messagebox.askyesno(APP_TITLE, "Issues:\n- " + "\n- ".join(issues) + "\n\nProceed anyway?")
 		return True
@@ -1179,6 +1226,7 @@ class App(tk.Tk):
 		# Folders
 		defs_root = mod_dir / "Defs"; defs_root.mkdir(parents=True, exist_ok=True)
 		sounds_root = mod_dir / "Sounds" / "MusicExpanded"; sounds_root.mkdir(parents=True, exist_ok=True)
+		textures_root = mod_dir / "Textures"  # for theme icon PNGs
 
 		dest_folders = set()
 		for d in self.defs:
@@ -1192,6 +1240,14 @@ class App(tk.Tk):
 			(dfolder / "tracks.xml").write_text(build_tracks_xml(d), encoding="utf-8", newline="\n")
 			(dfolder / "theme.xml").write_text(build_theme_xml(d), encoding="utf-8", newline="\n")
 
+			# Copy icon if provided (iconPath is required in XML either way)
+			if (d.icon_rel or "").strip() and d.icon_src and Path(d.icon_src).exists():
+				target_png = textures_root / (d.icon_rel + ".png")
+				target_png.parent.mkdir(parents=True, exist_ok=True)
+				try: shutil.copy2(d.icon_src, target_png)
+				except Exception as e: messagebox.showwarning(APP_TITLE, f"Failed to copy theme icon for {d.label_game}: {e}")
+
+			# Audio
 			dest_folder = sounds_root / d.content_folder
 			dest_folder.mkdir(parents=True, exist_ok=True)
 			for t in d.tracks:
@@ -1240,6 +1296,17 @@ class App(tk.Tk):
 	def _pick_modicon(self):
 		p = filedialog.askopenfilename(title="Pick modicon.png", filetypes=[("PNG","*.png")])
 		if p: self.modicon_src.set(p)
+	def _pick_theme_icon(self):
+		d = self._curdef()
+		if not d:
+			messagebox.showerror(APP_TITLE, "Create/select a Def first."); return
+		fp = filedialog.askopenfilename(title="Pick theme icon (PNG)", filetypes=[("PNG","*.png")])
+		if not fp: return
+		if not (d.icon_rel or "").strip():
+			d.icon_rel = f'UI/Icons/{sanitize_simple(d.label_game) or d.content_folder or "Game"}'
+		self.icon_rel_var.set(d.icon_rel)
+		d.icon_src = Path(fp)
+		self._refresh_previews()
 	def _curdef(self) -> ProjectDef|None:
 		idx = self.cur_def_idx.get()
 		return self.defs[idx] if 0 <= idx < len(self.defs) else None
