@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-# mef_builder_gui_v2_7_4.py
-# v2.7.4 — UI layout polish + responsive scaling
-# - Defs header: “Def folder … / Open Def Folder” moved next to “Add new Def…”
-# - Treeview & previews get h/v scrollbars; editor becomes scrollable
-# - Column stretching and weight configs for better windowed use
+# mef_builder_gui_v3_2_0.py
+#
+# v3.2.0 — “Everything we talked about” merge
+# - Tabs: About, Theme (incl. Def controls), Track.xml, Build
+# - One live preview per page (Theme→theme.xml, Track→tracks.xml)
+# - Track editor reflowed: never cuts off; tall, single-column Allowed Biomes
+# - Multiline Supported Versions + Load After; auto-growing text areas
+# - Import MEF mod: parses ALL Def folders; populates Theme + Track views
+# - Build & Overwrite buttons in toolbar (always accessible)
+# - Dark/Light mode fully themed (scrollbars troughs, text bg, etc.); toggle pinned far right
+# - Tooltips on header buttons; keyboard shortcuts (Ctrl+N/L/S/I/B; Ctrl+Shift+O)
+# - Bottom Previous/Next navigator across tabs
+# - Label Prefix optional; Track Label edits apply immediately; automatic defNames
+# - No Icon page; no clone/move-up/move-down; patches ignored
+# - Dependencies switch to zal.mef for >= 1.5
 
-import re, shutil, webbrowser, os, math, json, subprocess, sys
+import re, shutil, webbrowser, os, json, subprocess, sys, math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-APP_TITLE = "MEF Builder v2.7.4"
+APP_TITLE = "MEF Builder v3.2.0"
 
-ABOUT_VERSIONS = [f"1.{i}" for i in range(3,10)] + ["2.0"]  # 1.3…1.9, 2.0
 BATTLE_CUES = {"BattleSmall","BattleMedium","BattleLarge","BattleLegendary"}
 DEFAULT_BIOMES = [
 	"TemperateForest","BorealForest","Tundra","AridShrubland","Desert",
@@ -21,36 +30,37 @@ DEFAULT_BIOMES = [
 ]
 INVALID_FS = r'<>:"/\\|?*'
 
-# ---- Dark theme colors
-CLR_BG   = "#1e1e1e"
-CLR_FG   = "#e6e6e6"
-CLR_ALT  = "#252526"
-CLR_ACC  = "#007acc"
-CLR_MID  = "#3c3c3c"
-CLR_SEL  = "#094771"
+# ---- Dark / Light palettes
+PAL_D = dict(bg="#1e1e1e", fg="#e6e6e6", alt="#252526", acc="#007acc", mid="#3c3c3c", sel="#094771", trough="#2a2a2a")
+PAL_L = dict(bg="#f3f3f3", fg="#101010", alt="#ffffff", acc="#2b6cb0", mid="#d0d0d0", sel="#cfe7ff", trough="#e4e4e4")
 
-def apply_dark_mode(root: tk.Tk):
+def apply_palette(root: tk.Tk, dark: bool):
+	p = PAL_D if dark else PAL_L
 	style = ttk.Style(root)
 	try: style.theme_use("clam")
 	except: pass
-	root.configure(bg=CLR_BG)
-	style.configure(".", background=CLR_BG, foreground=CLR_FG, fieldbackground=CLR_ALT, bordercolor=CLR_MID, focuscolor=CLR_ACC)
-	for n in ("TFrame","TLabelframe","TLabelframe.Label","TLabel","TButton","TEntry","TCheckbutton","TMenubutton",
-	          "TNotebook","TNotebook.Tab","TCombobox","Horizontal.TScrollbar","Vertical.TScrollbar","TSeparator"):
-		style.configure(n, background=CLR_BG, foreground=CLR_FG)
-	style.map("TButton", background=[("active", CLR_MID), ("pressed", CLR_MID)])
-	style.configure("TEntry", fieldbackground=CLR_ALT)
-	style.configure("TCombobox", fieldbackground=CLR_ALT)
-	style.configure("TNotebook", background=CLR_BG, bordercolor=CLR_MID)
-	style.configure("TNotebook.Tab", background=CLR_ALT, lightcolor=CLR_ALT, bordercolor=CLR_MID, padding=(10,5))
-	style.map("TNotebook.Tab", background=[("selected", CLR_MID)], foreground=[("selected", CLR_FG)])
-	style.configure("Treeview", background=CLR_ALT, fieldbackground=CLR_ALT, foreground=CLR_FG, bordercolor=CLR_MID)
-	style.configure("Treeview.Heading", background=CLR_MID, foreground=CLR_FG)
-	style.map("Treeview", background=[("selected", CLR_SEL)])
-	root.option_add("*Menu*background", CLR_BG)
-	root.option_add("*Menu*foreground", CLR_FG)
-	root.option_add("*Menu*activeBackground", CLR_MID)
-	root.option_add("*Menu*activeForeground", CLR_FG)
+	root.configure(bg=p["bg"])
+	root._palette = p
+
+	style.configure(".", background=p["bg"], foreground=p["fg"], fieldbackground=p["alt"], bordercolor=p["mid"], focuscolor=p["acc"])
+	for n in ("TFrame","TLabelframe","TLabelframe.Label","TLabel","TButton","TEntry","TCheckbutton","TNotebook",
+	          "TNotebook.Tab","TCombobox","TSeparator","TPanedwindow"):
+		style.configure(n, background=p["bg"], foreground=p["fg"])
+	style.configure("TNotebook", background=p["bg"], bordercolor=p["mid"])
+	style.configure("TNotebook.Tab", background=p["alt"], lightcolor=p["alt"], bordercolor=p["mid"], padding=(10,5))
+	style.map("TNotebook.Tab", background=[("selected", p["mid"])], foreground=[("selected", p["fg"])])
+
+	style.configure("Treeview", background=p["alt"], fieldbackground=p["alt"], foreground=p["fg"], bordercolor=p["mid"])
+	style.configure("Treeview.Heading", background=p["mid"], foreground=p["fg"])
+	style.map("Treeview", background=[("selected", p["sel"])])
+
+	for s in ("Vertical.TScrollbar","Horizontal.TScrollbar","TScrollbar"):
+		style.configure(s, background=p["alt"], troughcolor=p["trough"], bordercolor=p["mid"], arrowcolor=p["fg"])
+
+	root.option_add("*Menu*background", p["bg"])
+	root.option_add("*Menu*foreground", p["fg"])
+	root.option_add("*Menu*activeBackground", p["mid"])
+	root.option_add("*Menu*activeForeground", p["fg"])
 
 def sanitize_component(s: str) -> str:
 	s2 = "".join("_" if c in INVALID_FS else c for c in s)
@@ -83,15 +93,16 @@ class TrackUse:
 		self.cue_data = (cue_data or "").strip()
 		self.allowed_biomes = list(allowed_biomes) if allowed_biomes else []
 	def summary(self):
-		if self.cue_type is None: return "Ambient"
-		if self.cue_type == "Custom": return f'Custom[{self.cue_data}]' if self.cue_data else "Custom"
-		return self.cue_type
+		tag = "Ambient" if self.cue_type is None else ("Custom" if self.cue_type=="Custom" else self.cue_type)
+		if self.cue_type=="Custom" and self.cue_data: tag += f"[{self.cue_data}]"
+		if self.allowed_biomes: tag += " [" + ",".join(self.allowed_biomes) + "]"
+		return tag
 
 class Track:
 	def __init__(self, idx: int, path: Path, display_title: str, file_title: str):
 		self.idx = idx
 		self.path = Path(path)
-		self.display_title = display_title     # editable right-side label
+		self.display_title = display_title     # shown in game (right part)
 		self.file_title = file_title           # sanitized for clipPath/filename
 		self.uses: list[TrackUse] = [TrackUse()]  # default Ambient
 
@@ -100,15 +111,15 @@ class ProjectDef:
 		self.label_game = label_game
 		self.game_code = infer_game_code(label_game)
 		self.content_folder = sanitize_simple(label_game)
-		self.icon_base = self.content_folder
-		self.icon_src = ""          # optional picked file path
-		self.src_music = ""         # optional memory of where files came from
-		self.label_prefix = self.label_game
+		self.label_prefix = ""  # OPTIONAL global prefix for labels
+		self.theme_description = f"{label_game} music integrated via the Music Expanded Framework."
 		self.tracks: list[Track] = []
-		self._src_def_dir: Path|None = None  # set if imported
+		self._src_def_dir: Path|None = None
 
 # ---------------- XML builders ----------------
-def build_about_xml(name, description_cdata, author, package_id, versions_checked, load_after_lines):
+def build_about_xml(name, description_cdata, author, package_id, versions_lines, load_after_lines):
+	versions = [ln.strip() for ln in versions_lines if ln.strip()]
+	load_after = [ln.strip() for ln in load_after_lines if ln.strip()]
 	lines = []
 	lines.append('<?xml version="1.0" encoding="utf-8"?>')
 	lines.append('<ModMetaData>')
@@ -117,16 +128,15 @@ def build_about_xml(name, description_cdata, author, package_id, versions_checke
 	lines.append(f'\t<author>{author}</author>')
 	lines.append(f'\t<packageId>{package_id}</packageId>')
 	lines.append('\t\t<supportedVersions>')
-	for v in versions_checked:
+	for v in versions:
 		lines.append(f'\t\t\t<li>{v}</li>')
 	lines.append('\t\t</supportedVersions>')
 	lines.append('\t<loadAfter>')
-	for la in load_after_lines:
-		la = la.strip()
-		if la: lines.append(f'\t\t<li>{la}</li>')
+	for la in load_after:
+		lines.append(f'\t\t<li>{la}</li>')
 	lines.append('\t</loadAfter>')
 	lines.append('\t\t<modDependenciesByVersion>')
-	for v in versions_checked:
+	for v in versions:
 		pkg, disp = dep_for_version(v)
 		lines.append(f'\t\t\t<v{v}>')
 		lines.append('\t\t\t\t<li>')
@@ -138,6 +148,11 @@ def build_about_xml(name, description_cdata, author, package_id, versions_checke
 	lines.append('\t\t</modDependenciesByVersion>')
 	lines.append('</ModMetaData>')
 	return "\n".join(lines) + "\n"
+
+def _compose_label(prefix: str, right_part: str) -> str:
+	prefix = (prefix or "").strip()
+	right = (right_part or "").strip()
+	return f"{prefix} – {right}" if prefix else right
 
 def xml_trackdef(defname, label, clip_path, cue=None, cue_data=None, allowed_biomes=None) -> str:
 	buf = []
@@ -171,9 +186,7 @@ def build_tracks_xml(project_def: ProjectDef):
 	for t in project_def.tracks:
 		for use in t.uses:
 			defname = next_dn()
-			label_left = (project_def.label_prefix or project_def.label_game).strip()
-			right = t.display_title.strip() or t.file_title
-			label = f"{label_left} – {right}"
+			label = _compose_label(project_def.label_prefix, t.display_title or t.file_title)
 			clip = f"MusicExpanded/{project_def.content_folder}/{t.idx:03d}. {t.file_title}"
 			entry = {"defname": defname, "label": label, "clip": clip, "cue": None, "cue_data": None, "biomes": use.allowed_biomes or None}
 			if use.cue_type is None:
@@ -200,44 +213,33 @@ def build_tracks_xml(project_def: ProjectDef):
 	for e in sections["battle"]:
 		lines.append(xml_trackdef(e["defname"], e["label"], e["clip"], e["cue"], e["cue_data"], e["biomes"]))
 	lines.append('')
-	lines.append('\t<!-- Custom Cues -->')
+	lines.append('\t<!-- Custom Cues (Base Game & DLC) -->')
 	for e in sections["custom"]:
 		lines.append(xml_trackdef(e["defname"], e["label"], e["clip"], e["cue"], e["cue_data"], e["biomes"]))
 	lines.append('</Defs>')
 	return "\n".join(lines) + "\n"
 
-def build_theme_xml(project_def: ProjectDef, description_text: str):
+def build_theme_xml(project_def: ProjectDef):
 	def next_defname():
 		i = 0
 		while True:
 			i += 1
 			yield f"ME_{project_def.game_code}_{i:03d}"
 	gen = next_defname()
-	sec = {"ambient": [], "maincredits": [], "battle": [], "custom": []}
+	defnames = []
 	for t in project_def.tracks:
-		for use in t.uses:
-			dn = next(gen)
-			if use.cue_type is None: sec["ambient"].append(dn)
-			elif use.cue_type in ("MainMenu","Credits"): sec["maincredits"].append(dn)
-			elif use.cue_type in BATTLE_CUES: sec["battle"].append(dn)
-			elif use.cue_type == "Custom": sec["custom"].append(dn)
-			else: sec["ambient"].append(dn)
+		for _use in t.uses:
+			defnames.append(next(gen))
 
 	lines = ['<?xml version="1.0" encoding="utf-8"?>', '<Defs>']
 	lines.append('\t<MusicExpanded.ThemeDef>')
 	lines.append(f'\t\t<defName>ME_{project_def.game_code}</defName>')
 	lines.append(f'\t\t<label>Music Expanded: {project_def.label_game}</label>')
-	lines.append(f'\t\t<description>{description_text}</description>')
-	lines.append(f'\t\t<iconPath>UI/Icons/{project_def.icon_base}</iconPath>')
+	lines.append(f'\t\t<description>{project_def.theme_description}</description>')
 	lines.append('\t\t<tracks>')
-	lines.append('\t\t\t<!-- Ambient Tracks (No Cue) -->')
-	for dn in sec["ambient"]: lines.append(f'\t\t\t<li>{dn}</li>')
-	lines.append('\t\t\t<!-- MainMenu and Credits Tracks -->')
-	for dn in sec["maincredits"]: lines.append(f'\t\t\t<li>{dn}</li>')
-	lines.append('\t\t\t<!-- Battle Tracks (BattleSmall, BattleMedium, BattleLarge, BattleLegendary) -->')
-	for dn in sec["battle"]: lines.append(f'\t\t\t<li>{dn}</li>')
-	lines.append('\t\t\t<!-- Custom Cues -->')
-	for dn in sec["custom"]: lines.append(f'\t\t\t<li>{dn}</li>')
+	lines.append('\t\t\t<!-- tracks listed in the same sequence as tracks.xml -->')
+	for dn in defnames:
+		lines.append(f'\t\t\t<li>{dn}</li>')
 	lines.append('\t\t</tracks>')
 	lines.append('\t</MusicExpanded.ThemeDef>')
 	lines.append('</Defs>')
@@ -274,48 +276,11 @@ def parse_about_xml(about_dir: Path):
 		"modicon": (about_dir / "modicon.png" if (about_dir / "modicon.png").exists() else None)
 	}
 
-def parse_def_folder(def_folder: Path, textures_root: Path) -> ProjectDef|None:
-	tracks_xml = def_folder / "tracks.xml"
-	theme_xml = def_folder / "theme.xml"
-	if not tracks_xml.exists() or not theme_xml.exists():
-		return None
-
-	try:
-		tree_t = ET.parse(theme_xml); r = tree_t.getroot()
-	except Exception:
-		return None
-	td = r.find(".//MusicExpanded.ThemeDef")
-	if td is None:
-		return None
-
-	label_node = td.find("label")
-	label_text = label_node.text if label_node is not None else ""
-	game_label = re.sub(r'^\s*Music Expanded:\s*', '', label_text).strip() or def_folder.name
-	icon_path_node = td.find("iconPath")
-	icon_base = ""
-	if icon_path_node is not None and icon_path_node.text:
-		m = re.match(r'^\s*UI/Icons/(.+?)\s*$', icon_path_node.text.strip())
-		if m: icon_base = m.group(1)
-
-	defname_node = td.find("defName")
-	game_code = None
-	if defname_node is not None and defname_node.text:
-		m = re.match(r'^\s*ME_([A-Z0-9]+)\s*$', defname_node.text.strip())
-		if m: game_code = m.group(1)
-
-	try:
-		tree_x = ET.parse(tracks_xml); rt = tree_x.getroot()
-	except Exception:
-		return None
-	track_nodes = rt.findall(".//MusicExpanded.TrackDef")
-	if not track_nodes:
-		return None
-
-	group = {}
-	prefix_candidates = []
-	content_folder = None
-
-	for tdnode in track_nodes:
+def parse_tracks_xml_root(root, into_pd: ProjectDef):
+	nodes = root.findall(".//MusicExpanded.TrackDef")
+	if not nodes: return False
+	group = {}; prefix_candidates = []; content_folder = None
+	for tdnode in nodes:
 		lbl = tdnode.findtext("label", default="").strip()
 		clip = tdnode.findtext("clipPath", default="").strip()
 
@@ -341,26 +306,16 @@ def parse_def_folder(def_folder: Path, textures_root: Path) -> ProjectDef|None:
 			for li in ab.iter("li"):
 				if li.text: allowed_biomes.append(li.text.strip())
 
-		if clip not in group:
-			group[clip] = {"idx": idx, "file_title": file_title, "display": display_right, "uses": []}
-		group[clip]["uses"].append(TrackUse(cue, cue_data, allowed_biomes))
+		key = clip or file_title
+		if key not in group:
+			group[key] = {"idx": idx, "file_title": file_title, "display": display_right, "uses": []}
+		group[key]["uses"].append(TrackUse(cue, cue_data, allowed_biomes))
 
-	pd = ProjectDef(game_label)
-	if game_code: pd.game_code = game_code
 	if content_folder:
-		pd.content_folder = content_folder
-		pd.icon_base = content_folder
-	if icon_base:
-		pd.icon_base = icon_base
-		icon_file = textures_root / f"{icon_base}.png"
-		if icon_file.exists():
-			pd.icon_src = str(icon_file)
-
+		into_pd.content_folder = content_folder
 	if prefix_candidates:
 		from collections import Counter
-		pd.label_prefix = Counter(prefix_candidates).most_common(1)[0][0]
-	else:
-		pd.label_prefix = pd.label_game
+		into_pd.label_prefix = Counter(prefix_candidates).most_common(1)[0][0]
 
 	items = list(group.items())
 	def _sortkey(it):
@@ -368,19 +323,48 @@ def parse_def_folder(def_folder: Path, textures_root: Path) -> ProjectDef|None:
 		return (rec["idx"] if isinstance(rec["idx"], int) else 9999, rec["file_title"])
 	items.sort(key=_sortkey)
 
-	pd.tracks = []
-	for i, (clip, rec) in enumerate(items, start=1):
+	into_pd.tracks = []
+	for i, (_k, rec) in enumerate(items, start=1):
 		idx = rec["idx"] if isinstance(rec["idx"], int) else i
 		fake_path = Path(f"{rec['file_title']}.ogg")
 		t = Track(idx, fake_path, rec["display"], rec["file_title"])
 		seen = set(); uses = []
 		for u in rec["uses"]:
-			key = (u.cue_type, u.cue_data, tuple(u.allowed_biomes))
-			if key in seen: continue
-			seen.add(key); uses.append(u)
+			key2 = (u.cue_type, u.cue_data, tuple(sorted(u.allowed_biomes)))
+			if key2 in seen: continue
+			seen.add(key2); uses.append(u)
 		t.uses = uses if uses else [TrackUse()]
-		pd.tracks.append(t)
+		into_pd.tracks.append(t)
+	return True
 
+def parse_theme_xml_root(root, into_pd: ProjectDef):
+	td = root.find(".//MusicExpanded.ThemeDef")
+	if td is None: return False
+	label_node = td.find("label")
+	if label_node is not None and label_node.text:
+		into_pd.label_game = re.sub(r'^\s*Music Expanded:\s*', '', label_node.text.strip())
+	defname_node = td.find("defName")
+	if defname_node is not None and defname_node.text:
+		m = re.match(r'^\s*ME_([A-Z0-9]+)\s*$', defname_node.text.strip())
+		if m: into_pd.game_code = m.group(1)
+	desc_node = td.find("description")
+	if desc_node is not None and desc_node.text is not None:
+		into_pd.theme_description = desc_node.text
+	return True
+
+def parse_def_folder(def_folder: Path) -> ProjectDef|None:
+	tracks_xml = def_folder / "tracks.xml"
+	theme_xml = def_folder / "theme.xml"
+	if not tracks_xml.exists() or not theme_xml.exists():
+		return None
+	try:
+		root_theme = ET.parse(theme_xml).getroot()
+		root_tracks = ET.parse(tracks_xml).getroot()
+	except Exception:
+		return None
+	pd = ProjectDef(def_folder.name)
+	if not parse_theme_xml_root(root_theme, pd): return None
+	if not parse_tracks_xml_root(root_tracks, pd): return None
 	pd._src_def_dir = def_folder
 	return pd
 
@@ -388,15 +372,16 @@ def parse_def_folder(def_folder: Path, textures_root: Path) -> ProjectDef|None:
 class App(tk.Tk):
 	def __init__(self):
 		super().__init__()
-		self.title(APP_TITLE); self.geometry("1200x820"); self.minsize(980, 720)
+		self.title(APP_TITLE); self.geometry("1360x900"); self.minsize(1120, 780)
+
+		self._dark = True
 
 		# About state
 		self.about_name = tk.StringVar(value="Music Expanded: ")
 		self.about_author = tk.StringVar(value="karbonpanzer")
 		self.about_package = tk.StringVar(value="musicexpanded.")
-		self.about_versions = {v: tk.BooleanVar(value=(v in ["1.6","2.0"])) for v in ABOUT_VERSIONS}
-		self.about_load_after = tk.StringVar(value="musicexpanded.framework\nVanillaExpanded.VEE")
-		self.about_desc = "Put your About description here (wrapped in CDATA)."
+		self.about_versions_text_default = "1.6\n2.0"
+		self.about_load_after_default = "musicexpanded.framework\nVanillaExpanded.VEE"
 		self.preview_src = tk.StringVar(value="")
 		self.modicon_src = tk.StringVar(value="")
 
@@ -405,97 +390,82 @@ class App(tk.Tk):
 		self.cur_def_idx = tk.IntVar(value=-1)
 		self.loaded_mod_dir: Path|None = None
 
-		# Header buttons references for state toggling
-		self.btn_open_mod = None
-		self.btn_open_def = None
-
-		# Menu entry index for “Open Mod Folder”
-		self._proj_open_mod_idx = None
-
 		# Output
 		self.out_root = tk.StringVar(value=str(Path.cwd() / "out"))
 
-		# Icon-tab state
-		self.icon_src = tk.StringVar(value="")
-		self.icon_base_var = tk.StringVar(value="")
+		# track/theme text widgets for palette/auto-size
+		self._tk_texts: list[tk.Text] = []
+		self._auto_grow_map: dict[tk.Text, tuple[int,int]] = {}
 
-		# Build UI
 		self._build_ui()
-		apply_dark_mode(self)
-		self._refresh_all_previews()
+		apply_palette(self, self._dark)
+		self._repaint_texts()
+		self._refresh_previews()
+		self._update_toolbar_states()
 
+	# ---------- UI
 	def _build_ui(self):
-		# Menubar
-		menubar = tk.Menu(self)
+		# Toolbar (left actions, right theme toggle)
+		bar = ttk.Frame(self, padding=(10,6,10,0)); bar.pack(fill="x")
+		for i in range(16): bar.columnconfigure(i, weight=0)
+		bar.columnconfigure(14, weight=1)
 
-		# File menu
-		filemenu = tk.Menu(menubar, tearoff=0)
-		filemenu.add_command(label="Build (export new folder)", command=self._build, accelerator="Ctrl+B")
-		filemenu.add_command(label="Overwrite (update opened mod XMLs)", command=self._overwrite, accelerator="Ctrl+O")
-		filemenu.add_separator()
-		filemenu.add_command(label="Exit", command=self.destroy)
-		menubar.add_cascade(label="File", menu=filemenu)
+		def make_btn(txt, cb, tip=""):
+			b = ttk.Button(bar, text=txt, command=cb)
+			if tip: self._tooltip(b, tip)
+			return b
 
-		# Project menu
-		self.projmenu = tk.Menu(menubar, tearoff=0)
-		self.projmenu.add_command(label="New (clear project)", command=self._new_project)
-		self.projmenu.add_command(label="Open MEF Mod Folder…", command=self._open_mod_folder)
-		self.projmenu.add_command(label="Open Mod Folder", command=self._open_loaded_mod_folder, state="disabled")
-		self._proj_open_mod_idx = self.projmenu.index("end")
-		self.projmenu.add_separator()
-		self.projmenu.add_command(label="Save Project…", command=self._save_project)
-		self.projmenu.add_command(label="Open Project…", command=self._open_project_file)
-		menubar.add_cascade(label="Project", menu=self.projmenu)
+		self.btn_new     = make_btn("🆕 New",   self._new_project, "Start a new project (.mefproj) — Ctrl+N")
+		self.btn_load    = make_btn("📂 Load",  self._open_project_file, "Load project (.mefproj) — Ctrl+L")
+		self.btn_save    = make_btn("💾 Save",  self._save_project, "Save project — Ctrl+S")
+		self.btn_import  = make_btn("📥 Import", self._open_mod_folder, "Import existing MEF mod folder — Ctrl+I")
+		self.btn_overwr  = make_btn("🔧 Overwrite", self._overwrite, "Overwrite XMLs in imported mod — Ctrl+Shift+O")
+		self.btn_build   = make_btn("🛠 Build", self._build, "Build a new mod folder — Ctrl+B")
+		self.theme_btn   = ttk.Button(bar, text="🌙", width=3, command=self._toggle_theme)
+		self._tooltip(self.theme_btn, "Toggle light/dark theme")
 
-		# Help menu
-		helpmenu = tk.Menu(menubar, tearoff=0)
-		helpmenu.add_command(label="Open ZAL.MEF / MEF GitHub", command=lambda: webbrowser.open_new("https://github.com/Music-Expanded/music-expanded-framework"))
-		helpmenu.add_command(label="Open KarbonPanzer GitHub", command=lambda: webbrowser.open_new("https://github.com/karbonpanzer"))
-		menubar.add_cascade(label="Help", menu=helpmenu)
+		for i, b in enumerate((self.btn_new,self.btn_load,self.btn_save,self.btn_import,self.btn_overwr,self.btn_build)):
+			b.grid(row=0, column=i, padx=(0 if i==0 else 6, 6), ipady=2)
+		ttk.Label(bar, text="").grid(row=0, column=14, sticky="ew")  # spacer
+		self.theme_btn.grid(row=0, column=15, sticky="e")            # pinned far right
 
-		self.config(menu=menubar)
+		# Keyboard shortcuts
+		self.bind_all("<Control-n>", lambda e: self._new_project())
+		self.bind_all("<Control-l>", lambda e: self._open_project_file())
+		self.bind_all("<Control-s>", lambda e: self._save_project())
+		self.bind_all("<Control-i>", lambda e: self._open_mod_folder())
 		self.bind_all("<Control-b>", lambda e: self._build())
-		self.bind_all("<Control-o>", lambda e: self._overwrite())
+		self.bind_all("<Control-O>", lambda e: self._overwrite())   # Shift+O
 
-		root = ttk.Frame(self, padding=(10,8,10,6)); root.pack(fill="both", expand=True)
-		root.rowconfigure(0, weight=1); root.columnconfigure(0, weight=1)
-		self.tabs = ttk.Notebook(root); self.tabs.grid(row=0, column=0, sticky="nsew")
+		# Notebook
+		self.nb = ttk.Notebook(self); self.nb.pack(fill="both", expand=True, padx=10, pady=(6,8))
+		self.tab_about = ttk.Frame(self.nb, padding=10)
+		self.tab_theme = ttk.Frame(self.nb, padding=10)
+		self.tab_tracks= ttk.Frame(self.nb, padding=10)
+		self.tab_build = ttk.Frame(self.nb, padding=10)
+		self.nb.add(self.tab_about, text="About")
+		self.nb.add(self.tab_theme, text="Theme")
+		self.nb.add(self.tab_tracks, text="Track.xml")
+		self.nb.add(self.tab_build, text="Build")
 
-		# About
-		tab_about = ttk.Frame(self.tabs, padding=10); self.tabs.add(tab_about, text="About")
-		self._build_about(tab_about)
+		self._build_about_tab(self.tab_about)
+		self._build_theme_tab(self.tab_theme)
+		self._build_tracks_tab(self.tab_tracks)
+		self._build_build_tab(self.tab_build)
 
-		# Defs
-		tab_defs = ttk.Frame(self.tabs, padding=10); self.tabs.add(tab_defs, text="Defs")
-		tab_defs.rowconfigure(3, weight=1)  # main split grows
-		tab_defs.columnconfigure(0, weight=1)
-		self._build_defs(tab_defs)
-
-		# Icon (formerly Textures)
-		tab_icon = ttk.Frame(self.tabs, padding=10); self.tabs.add(tab_icon, text="Icon")
-		self._build_icon(tab_icon)
-
-		# Bottom bar
-		bar = ttk.Frame(root); bar.grid(row=1, column=0, sticky="ew", pady=(8,0))
-		bar.columnconfigure(2, weight=1)
-		self.prev_btn = ttk.Button(bar, text="◀ Previous", command=self._prev_tab); self.prev_btn.grid(row=0, column=0)
-		self.next_btn = ttk.Button(bar, text="Next ▶", command=self._next_tab); self.next_btn.grid(row=0, column=1, padx=(6,12))
-
-		ttk.Label(bar, text="Output root:").grid(row=0, column=2, sticky="e")
-		out_box = ttk.Frame(bar); out_box.grid(row=0, column=3, sticky="ew")
-		out_box.columnconfigure(0, weight=1)
-		ttk.Entry(out_box, textvariable=self.out_root).grid(row=0, column=0, sticky="ew", padx=6)
-		ttk.Button(out_box, text="Browse…", command=self._pick_out_root).grid(row=0, column=1)
-		ttk.Button(out_box, text="Open", command=lambda: self._open_folder(Path(self.out_root.get().strip()))).grid(row=0, column=2, padx=(6,0))
-
-		self.overwrite_btn = ttk.Button(bar, text="Overwrite", command=self._overwrite); self.overwrite_btn.grid(row=0, column=5, padx=(6,0), sticky="e")
-		self.build_btn = ttk.Button(bar, text="Build", command=self._build); self.build_btn.grid(row=0, column=6, sticky="e")
-
-		self._update_nav(); self._update_overwrite_enabled()
+		# Bottom nav (Prev/Next)
+		nav = ttk.Frame(self, padding=(10,0,10,8)); nav.pack(fill="x")
+		nav.columnconfigure(0, weight=1)
+		self.prev_btn = ttk.Button(nav, text="◀ Previous", command=self._prev_tab)
+		self.next_btn = ttk.Button(nav, text="Next ▶", command=self._next_tab)
+		self.prev_btn.pack(side="left")
+		self.next_btn.pack(side="right")
+		self._update_nav()
 
 	# ---------- About tab
-	def _build_about(self, tab):
+	def _build_about_tab(self, tab):
 		tab.columnconfigure(1, weight=1)
+		for r in (7,): tab.rowconfigure(r, weight=1)
 
 		r1 = ttk.Frame(tab); r1.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0,6))
 		ttk.Label(r1, text="Name:").pack(side="left")
@@ -517,272 +487,534 @@ class App(tk.Tk):
 		self.about_name.trace_add("write", _about_validate)
 		self.about_package.trace_add("write", _about_validate); _about_validate()
 
-		ttk.Label(tab, text="Supported Versions:").grid(row=2, column=0, sticky="w")
-		grid = ttk.Frame(tab); grid.grid(row=3, column=0, columnspan=2, sticky="w", pady=(2,6))
-		for i, v in enumerate(ABOUT_VERSIONS):
-			ttk.Checkbutton(grid, text=v, variable=self.about_versions[v]).grid(row=i//8, column=i%8, sticky="w", padx=4, pady=2)
+		# Versions (auto-grow)
+		ttk.Label(tab, text="Supported Versions (one per line, e.g., 1.6):").grid(row=2, column=0, sticky="w")
+		self.vers_txt = tk.Text(tab, height=3)
+		self.vers_txt.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(2,6))
+		self._track_text(self.vers_txt); self.vers_txt.insert("1.0", self.about_versions_text_default)
+		self._auto_grow(self.vers_txt, min_rows=3, max_rows=14)
 
+		# Load After (auto-grow)
 		ttk.Label(tab, text="Load After (one per line):").grid(row=4, column=0, sticky="w")
-		ttk.Entry(tab, textvariable=self.about_load_after).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0,6))
+		self.load_after_txt = tk.Text(tab, height=3)
+		self.load_after_txt.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2,6))
+		self._track_text(self.load_after_txt); self.load_after_txt.insert("1.0", self.about_load_after_default)
+		self._auto_grow(self.load_after_txt, min_rows=3, max_rows=12)
 
+		# Description
 		ttk.Label(tab, text="Description (CDATA):").grid(row=6, column=0, sticky="w")
-		self.desc_txt = tk.Text(tab, height=8, bg=CLR_ALT, fg=CLR_FG, insertbackground=CLR_FG)
-		self.desc_txt.insert("1.0", self.about_desc); self.desc_txt.grid(row=7, column=0, columnspan=2, sticky="nsew")
+		self.desc_txt = tk.Text(tab, height=8, wrap="word")
+		self.desc_txt.grid(row=7, column=0, columnspan=2, sticky="nsew", pady=(2,0))
+		self._track_text(self.desc_txt)
 
-		ttk.Separator(tab, orient="horizontal").grid(row=8, column=0, columnspan=2, sticky="ew", pady=8)
-		imgs = ttk.Frame(tab); imgs.grid(row=9, column=0, columnspan=2, sticky="ew")
+		# Images
+		imgs = ttk.Frame(tab); imgs.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8,0))
 		imgs.columnconfigure(1, weight=1)
 		ttk.Label(imgs, text="Preview.png:").grid(row=0, column=0, sticky="w")
 		ttk.Entry(imgs, textvariable=self.preview_src).grid(row=0, column=1, sticky="ew", padx=6)
-		ttk.Button(imgs, text="Choose…", command=self._pick_preview).grid(row=0, column=2, sticky="w")
+		ttk.Button(imgs, text="Choose…", command=self._pick_preview).grid(row=0, column=2)
 		ttk.Label(imgs, text="modicon.png:").grid(row=1, column=0, sticky="w", pady=(6,0))
 		ttk.Entry(imgs, textvariable=self.modicon_src).grid(row=1, column=1, sticky="ew", padx=6, pady=(6,0))
-		ttk.Button(imgs, text="Choose…", command=self._pick_modicon).grid(row=1, column=2, sticky="w", pady=(6,0))
+		ttk.Button(imgs, text="Choose…", command=self._pick_modicon).grid(row=1, column=2, pady=(6,0))
 
-		tab.rowconfigure(7, weight=1)
+	# ---------- Theme tab (with preview on right)
+	def _build_theme_tab(self, tab):
+		tab.columnconfigure(0, weight=2)
+		tab.columnconfigure(1, weight=3)
+		tab.rowconfigure(1, weight=1)
 
-	# ---------- Defs tab
-	def _build_defs(self, tab):
-		# Status (top of Defs tab): Select / Opened / Open Mod
-		status = ttk.Frame(tab); status.grid(row=0, column=0, sticky="ew", pady=(0,4))
-		status.columnconfigure(1, weight=1)
-		ttk.Button(status, text="Select Mod Folder…", command=self._open_mod_folder).grid(row=0, column=0, sticky="w")
-		self.loaded_from_lbl = ttk.Label(status, text="   Opened mod: (none)")
-		self.loaded_from_lbl.grid(row=0, column=1, sticky="w", padx=(8,0))
-		self.btn_open_mod = ttk.Button(status, text="Open Mod Folder", command=self._open_loaded_mod_folder, state="disabled")
-		self.btn_open_mod.grid(row=0, column=2, sticky="e")
+		# Left column: def controls + fields + description
+		left = ttk.Frame(tab); left.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0,8))
+		for c in (1,3,5,7): left.columnconfigure(c, weight=1)
+		left.rowconfigure(5, weight=1)
 
-		# Row 1: Add-new-def + Def folder display & open-button (moved here)
-		row_add = ttk.Frame(tab); row_add.grid(row=1, column=0, sticky="ew", pady=(2,6))
-		row_add.columnconfigure(1, weight=1)
-		ttk.Button(row_add, text="Add new Def…", command=self._add_def).grid(row=0, column=0, sticky="w")
-		self.def_folder_lbl = ttk.Label(row_add, text="Def folder: (none)")
-		self.def_folder_lbl.grid(row=0, column=1, sticky="e")
-		self.btn_open_def = ttk.Button(row_add, text="Open Def Folder", command=self._open_current_def_folder, state="disabled")
-		self.btn_open_def.grid(row=0, column=2, sticky="e", padx=(8,0))
-
-		# Row 2: Def selector + rename/delete
-		h = ttk.Frame(tab); h.grid(row=2, column=0, sticky="ew", pady=(0,6))
+		# Def management
+		h = ttk.Frame(left); h.grid(row=0, column=0, columnspan=8, sticky="ew", pady=(0,6))
 		ttk.Label(h, text="Def:").pack(side="left")
 		self.def_combo = ttk.Combobox(h, state="readonly", width=32, values=[])
 		self.def_combo.bind("<<ComboboxSelected>>", self._on_def_combo_select)
 		self.def_combo.pack(side="left", padx=6)
-		ttk.Button(h, text="Rename…", command=self._rename_def).pack(side="left", padx=4)
-		ttk.Button(h, text="Delete", command=self._delete_def).pack(side="left", padx=4)
+		ttk.Button(h, text="Add…", command=self._add_def).pack(side="left", padx=(6,2))
+		ttk.Button(h, text="Duplicate", command=self._dup_def).pack(side="left", padx=2)
+		ttk.Button(h, text="Rename…", command=self._rename_def).pack(side="left", padx=2)
+		ttk.Button(h, text="Delete", command=self._delete_def).pack(side="left", padx=2)
+		self.def_folder_lbl = ttk.Label(left, text="Def folder: (none)")
+		self.def_folder_lbl.grid(row=1, column=0, columnspan=8, sticky="w")
 
-		# Core fields + Label Prefix
-		core = ttk.Frame(tab); core.grid(row=3, column=0, sticky="ew", pady=(0,8))
-		for c in range(8): core.columnconfigure(c, weight=1 if c in (1,3,5,7) else 0)
+		# Core fields
 		self.game_label = tk.StringVar(value="")
-		self.game_code = tk.StringVar(value="")
+		self.game_code  = tk.StringVar(value="")
 		self.content_folder = tk.StringVar(value="")
 		self.label_prefix = tk.StringVar(value="")
-		ttk.Label(core, text="Game Name:").grid(row=0, column=0, sticky="w")
-		ttk.Entry(core, textvariable=self.game_label).grid(row=0, column=1, sticky="ew", padx=6)
-		ttk.Label(core, text="Game Code:").grid(row=0, column=2, sticky="w")
-		ttk.Entry(core, textvariable=self.game_code, width=10).grid(row=0, column=3, sticky="w", padx=6)
-		ttk.Label(core, text="Content folder:").grid(row=0, column=4, sticky="w")
-		ttk.Entry(core, textvariable=self.content_folder).grid(row=0, column=5, sticky="ew", padx=6)
-		ttk.Label(core, text="Label Prefix:").grid(row=0, column=6, sticky="w")
-		ttk.Entry(core, textvariable=self.label_prefix).grid(row=0, column=7, sticky="ew", padx=6)
+		ttk.Label(left, text="Game Name:").grid(row=2, column=0, sticky="w")
+		ttk.Entry(left, textvariable=self.game_label).grid(row=2, column=1, sticky="ew", padx=6)
+		ttk.Label(left, text="Game Code:").grid(row=2, column=2, sticky="w")
+		ttk.Entry(left, textvariable=self.game_code, width=10).grid(row=2, column=3, sticky="w", padx=6)
+		ttk.Label(left, text="Content folder:").grid(row=2, column=4, sticky="w")
+		ttk.Entry(left, textvariable=self.content_folder).grid(row=2, column=5, sticky="ew", padx=6)
+		ttk.Label(left, text="Label Prefix (optional):").grid(row=2, column=6, sticky="w")
+		ttk.Entry(left, textvariable=self.label_prefix).grid(row=2, column=7, sticky="ew", padx=6)
 		for var in (self.game_label, self.game_code, self.content_folder, self.label_prefix):
 			var.trace_add("write", self._on_core_changed)
 
-		# Adders
-		srcrow = ttk.Frame(tab); srcrow.grid(row=4, column=0, sticky="w", pady=(0,8))
-		ttk.Button(srcrow, text="Add files…", command=self._add_track_files).pack(side="left")
-		ttk.Button(srcrow, text="Add folder…", command=self._add_tracks_from_folder).pack(side="left", padx=6)
+		# Theme description
+		ttk.Label(left, text="Theme description:").grid(row=3, column=0, columnspan=8, sticky="w", pady=(6,2))
+		self.theme_desc_txt = tk.Text(left, height=10, wrap="word")
+		self.theme_desc_txt.grid(row=4, column=0, columnspan=8, sticky="nsew")
+		self._track_text(self.theme_desc_txt)
+		self._auto_grow(self.theme_desc_txt, min_rows=6, max_rows=20)
 
-		# Split panes
-		main_split = ttk.PanedWindow(tab, orient="vertical"); main_split.grid(row=5, column=0, sticky="nsew")
-		tab.rowconfigure(5, weight=1); tab.columnconfigure(0, weight=1)
-		top = ttk.PanedWindow(main_split, orient="horizontal"); main_split.add(top, weight=4)
-		left = ttk.Frame(top); left.rowconfigure(1, weight=1); left.columnconfigure(0, weight=1); top.add(left, weight=3)
-		right = ttk.Frame(top); right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1); top.add(right, weight=4)
+		# Right column: theme preview + regenerate
+		right = ttk.Frame(tab); right.grid(row=0, column=1, rowspan=2, sticky="nsew")
+		right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1)
 
-		# Track table with BOTH scrollbars
-		tree_container = ttk.Frame(left); tree_container.grid(row=1, column=0, sticky="nsew")
-		tree_container.rowconfigure(0, weight=1); tree_container.columnconfigure(0, weight=1)
-		self.tracks_tree = ttk.Treeview(tree_container, columns=("idx","file","label","uses"), show="headings", selectmode="extended")
-		# stretch columns so they don't force horizontal growth
-		col_specs = (("idx",70),("file",280),("label",280),("uses",240))
-		for c,w in col_specs:
-			self.tracks_tree.heading(c, text=c.upper())
-			self.tracks_tree.column(c, width=w, anchor="w", stretch=True)
-		ys = ttk.Scrollbar(tree_container, orient="vertical", command=self.tracks_tree.yview)
-		xs = ttk.Scrollbar(left, orient="horizontal", command=self.tracks_tree.xview)
+		self.theme_preview = tk.Text(right, wrap="none")
+		self._track_text(self.theme_preview)
+		thy = ttk.Scrollbar(right, orient="vertical", command=self.theme_preview.yview)
+		thx = ttk.Scrollbar(right, orient="horizontal", command=self.theme_preview.xview)
+		self.theme_preview.configure(yscrollcommand=thy.set, xscrollcommand=thx.set, state="disabled")
+		self.theme_preview.grid(row=0, column=0, sticky="nsew")
+		thy.grid(row=0, column=1, sticky="ns")
+		thx.grid(row=1, column=0, sticky="ew")
+		ttk.Button(right, text="Regenerate Preview", command=self._refresh_theme_preview).grid(row=2, column=0, pady=(8,0))
+
+	# ---------- Track.xml tab (editor left, preview right)
+	def _build_tracks_tab(self, tab):
+		tab.columnconfigure(0, weight=2)
+		tab.columnconfigure(1, weight=3)
+		tab.rowconfigure(0, weight=1)
+
+		# LEFT: table + scrollable editor (vertical split)
+		left = ttk.Panedwindow(tab, orient="vertical"); left.grid(row=0, column=0, sticky="nsew", padx=(0,8))
+		# a) track table
+		table_frame = ttk.Frame(left)
+		table_frame.rowconfigure(0, weight=1); table_frame.columnconfigure(0, weight=1)
+		self.tracks_tree = ttk.Treeview(table_frame, columns=("idx","file","label","uses"), show="headings", selectmode="extended")
+		for c,w in (("idx",70),("file",340),("label",340),("uses",320)):
+			self.tracks_tree.heading(c, text=c.upper()); self.tracks_tree.column(c, width=w, anchor="w", stretch=True)
+		ys = ttk.Scrollbar(table_frame, orient="vertical", command=self.tracks_tree.yview)
+		xs = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tracks_tree.xview)
 		self.tracks_tree.configure(yscroll=ys.set, xscroll=xs.set)
 		self.tracks_tree.grid(row=0, column=0, sticky="nsew")
 		ys.grid(row=0, column=1, sticky="ns")
-		xs.grid(row=2, column=0, sticky="ew")
+		xs.grid(row=1, column=0, sticky="ew")
 		self.tracks_tree.bind("<<TreeviewSelect>>", lambda e: self._on_track_select())
+		left.add(table_frame, weight=3)
 
-		# Previews with scrollbars
-		self.prev_nb = ttk.Notebook(right); self.prev_nb.grid(row=0, column=0, sticky="nsew")
-		tab_tracks = ttk.Frame(self.prev_nb); tab_tracks.rowconfigure(0, weight=1); tab_tracks.columnconfigure(0, weight=1)
-		tab_theme  = ttk.Frame(self.prev_nb);  tab_theme.rowconfigure(0, weight=1);  tab_theme.columnconfigure(0, weight=1)
-		self.prev_nb.add(tab_tracks, text="tracks.xml"); self.prev_nb.add(tab_theme,  text="theme.xml")
+		# b) scrollable editor
+		editor_holder = ttk.Frame(left)
+		editor_holder.rowconfigure(0, weight=1); editor_holder.columnconfigure(0, weight=1)
+		canvas = tk.Canvas(editor_holder, highlightthickness=0, bd=0, relief="flat", bg=self._palette_color("alt"))
+		vs = ttk.Scrollbar(editor_holder, orient="vertical", command=canvas.yview)
+		canvas.configure(yscrollcommand=vs.set)
+		canvas.grid(row=0, column=0, sticky="nsew")
+		vs.grid(row=0, column=1, sticky="ns")
+		editor = ttk.Frame(canvas)
+		canvas_id = canvas.create_window((0,0), window=editor, anchor="nw")
 
-		self.preview_tracks = tk.Text(tab_tracks, wrap="none", bg=CLR_ALT, fg=CLR_FG, insertbackground=CLR_FG)
-		pty = ttk.Scrollbar(tab_tracks, orient="vertical", command=self.preview_tracks.yview)
-		ptx = ttk.Scrollbar(tab_tracks, orient="horizontal", command=self.preview_tracks.xview)
-		self.preview_tracks.configure(yscrollcommand=pty.set, xscrollcommand=ptx.set)
-		self.preview_tracks.grid(row=0, column=0, sticky="nsew")
-		pty.grid(row=0, column=1, sticky="ns")
-		ptx.grid(row=1, column=0, sticky="ew")
+		def _sync_scroll(_evt=None):
+			canvas.configure(scrollregion=canvas.bbox("all"))
+			canvas.itemconfigure(canvas_id, width=canvas.winfo_width())
+		editor.bind("<Configure>", _sync_scroll)
+		canvas.bind("<Configure>", _sync_scroll)
 
-		self.preview_theme  = tk.Text(tab_theme,  wrap="none", bg=CLR_ALT, fg=CLR_FG, insertbackground=CLR_FG)
-		thy = ttk.Scrollbar(tab_theme, orient="vertical", command=self.preview_theme.yview)
-		thx = ttk.Scrollbar(tab_theme, orient="horizontal", command=self.preview_theme.xview)
-		self.preview_theme.configure(yscrollcommand=thy.set, xscrollcommand=thx.set)
-		self.preview_theme.grid(row=0, column=0, sticky="nsew")
-		thy.grid(row=0, column=1, sticky="ns")
-		thx.grid(row=1, column=0, sticky="ew")
+		# Adders
+		srcrow = ttk.Frame(editor); srcrow.grid(row=0, column=0, columnspan=6, sticky="w", pady=(8,8))
+		ttk.Button(srcrow, text="Add files…", command=self._add_track_files).pack(side="left")
+		ttk.Button(srcrow, text="Add folder…", command=self._add_tracks_from_folder).pack(side="left", padx=6)
 
-		# Editor: scrollable inside a LabelFrame
-		editor_lf = ttk.LabelFrame(main_split, text="Track editor (assign cues / labels / biomes)")
-		main_split.add(editor_lf, weight=1)
-		editor_lf.rowconfigure(0, weight=1); editor_lf.columnconfigure(0, weight=1)
+		# Compact two columns + tall, single-column biomes
+		for c in (0,1,2): editor.columnconfigure(c, weight=1)
 
-		editor_canvas = tk.Canvas(editor_lf, bg=CLR_ALT, highlightthickness=0)
-		editor_vs = ttk.Scrollbar(editor_lf, orient="vertical", command=editor_canvas.yview)
-		editor_canvas.configure(yscrollcommand=editor_vs.set)
-		editor_canvas.grid(row=0, column=0, sticky="nsew")
-		editor_vs.grid(row=0, column=1, sticky="ns")
-
-		editor = ttk.Frame(editor_canvas)
-		editor_id = editor_canvas.create_window((0,0), window=editor, anchor="nw")
-
-		def _on_editor_config(_evt=None):
-			editor_canvas.configure(scrollregion=editor_canvas.bbox("all"))
-			# Keep inner frame width synced to canvas width for proper layout
-			editor_canvas.itemconfigure(editor_id, width=editor_canvas.winfo_width())
-		editor.bind("<Configure>", _on_editor_config)
-		editor_canvas.bind("<Configure>", _on_editor_config)
-
-		# Editor contents (same as before)
-		ttk.Label(editor, text="Cue:").grid(row=0, column=0, sticky="w", padx=6, pady=(8,2))
-		self.cue_choice = ttk.Combobox(editor, state="readonly", width=22,
+		# Left column: cue + cueData + replace
+		colL = ttk.Frame(editor); colL.grid(row=1, column=0, sticky="nsew", padx=(0,12))
+		colL.columnconfigure(1, weight=1)
+		ttk.Label(colL, text="Cue:").grid(row=0, column=0, sticky="w", padx=6, pady=(0,2))
+		self.cue_choice = ttk.Combobox(colL, state="readonly", width=22,
 			values=["Ambient","MainMenu","Credits","BattleSmall","BattleMedium","BattleLarge","BattleLegendary","Custom"])
-		self.cue_choice.current(0); self.cue_choice.grid(row=0, column=1, sticky="w", padx=6, pady=(8,2))
-
-		ttk.Label(editor, text="cueData (Custom):").grid(row=1, column=0, sticky="w", padx=6)
+		self.cue_choice.current(0); self.cue_choice.grid(row=0, column=1, sticky="ew", padx=6, pady=(0,2))
+		ttk.Label(colL, text="cueData (Custom):").grid(row=1, column=0, sticky="w", padx=6)
 		self.cue_data = tk.StringVar(value="")
-		ttk.Entry(editor, textvariable=self.cue_data).grid(row=1, column=1, sticky="ew", padx=6)
+		ttk.Entry(colL, textvariable=self.cue_data).grid(row=1, column=1, sticky="ew", padx=6)
+		self.replace_ambient = tk.BooleanVar(value=True)
+		ttk.Checkbutton(colL, text="Replace default Ambient if first non-ambient is added",
+		                variable=self.replace_ambient).grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(6,0))
 
-		ttk.Label(editor, text="Label Prefix (global):").grid(row=0, column=2, sticky="w", padx=16, pady=(8,2))
-		self.label_prefix_entry = ttk.Entry(editor, textvariable=self.label_prefix)
-		self.label_prefix_entry.grid(row=0, column=3, sticky="ew", padx=6, pady=(8,2))
-
-		ttk.Label(editor, text="Label (right part):").grid(row=1, column=2, sticky="w", padx=16)
+		# Middle column: labels
+		colM = ttk.Frame(editor); colM.grid(row=1, column=1, sticky="nsew", padx=(0,12))
+		colM.columnconfigure(1, weight=1)
+		ttk.Label(colM, text="Label Prefix (optional, global):").grid(row=0, column=0, sticky="w", padx=6, pady=(0,2))
+		self.label_prefix_entry = ttk.Entry(colM, textvariable=self.label_prefix)
+		self.label_prefix_entry.grid(row=0, column=1, sticky="ew", padx=6)
+		ttk.Label(colM, text="Label (right part):").grid(row=1, column=0, sticky="w", padx=6, pady=(6,2))
 		self.track_label = tk.StringVar(value="")
-		ttk.Entry(editor, textvariable=self.track_label).grid(row=1, column=3, sticky="ew", padx=6)
+		ttk.Entry(colM, textvariable=self.track_label).grid(row=1, column=1, sticky="ew", padx=6)
+		self.track_label.trace_add("write", self._on_track_label_changed)
 
-		ttk.Label(editor, text="Allowed Biomes:").grid(row=0, column=4, sticky="nw", padx=16, pady=(8,2))
-		abf = ttk.Frame(editor); abf.grid(row=0, column=5, rowspan=2, sticky="w", padx=6, pady=(8,2))
+		# Right column: tall, vertical Allowed Biomes (single column)
+		colR = ttk.Frame(editor); colR.grid(row=1, column=2, sticky="nsew")
+		colR.columnconfigure(0, weight=1)
+		ttk.Label(colR, text="Allowed Biomes:").grid(row=0, column=0, sticky="w", padx=6, pady=(0,2))
+		ab_box = ttk.Frame(colR); ab_box.grid(row=1, column=0, sticky="nsew")
+		ab_box.columnconfigure(0, weight=1)
 		self.biome_vars = {}
 		for i, b in enumerate(DEFAULT_BIOMES):
 			var = tk.BooleanVar(value=False); self.biome_vars[b] = var
-			ttk.Checkbutton(abf, text=b, variable=var).grid(row=i//5, column=i%5, sticky="w")
+			ttk.Checkbutton(ab_box, text=b, variable=var).grid(row=i, column=0, sticky="w", padx=6, pady=2)
 
-		self.replace_ambient = tk.BooleanVar(value=True)
-		ttk.Checkbutton(editor, text="Replace default Ambient if first non-ambient is added", variable=self.replace_ambient)\
-			.grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=(6,4))
-
-		bbar = ttk.Frame(editor); bbar.grid(row=2, column=4, columnspan=2, sticky="e", padx=6, pady=(6,8))
+		# Buttons
+		bbar = ttk.Frame(editor); bbar.grid(row=2, column=0, columnspan=3, sticky="e", padx=6, pady=(10,8))
 		ttk.Button(bbar, text="Apply Cue",  command=self._apply_queue).pack(side="left")
 		ttk.Button(bbar, text="Remove Cue", command=self._remove_queue).pack(side="left", padx=8)
 
-		for c in (1,3):
-			editor.columnconfigure(c, weight=1)
+		left.add(editor_holder, weight=2)
 
-	# ---------- Icon tab
-	def _build_icon(self, tab):
-		tab.columnconfigure(1, weight=1)
-		header = ttk.Frame(tab); header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0,6))
-		header.columnconfigure(1, weight=1)
-		ttk.Label(header, text="Editing Def:").pack(side="right")
-		self.icon_def_combo = ttk.Combobox(header, state="readonly", width=32, values=[])
-		self.icon_def_combo.bind("<<ComboboxSelected>>", self._on_icon_def_select)
-		self.icon_def_combo.pack(side="right", padx=(6,0))
+		# RIGHT: track preview + regenerate
+		right = ttk.Frame(tab); right.grid(row=0, column=1, sticky="nsew")
+		right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1)
+		self.tracks_preview = tk.Text(right, wrap="none")
+		self._track_text(self.tracks_preview)
+		tpy = ttk.Scrollbar(right, orient="vertical", command=self.tracks_preview.yview)
+		tpx = ttk.Scrollbar(right, orient="horizontal", command=self.tracks_preview.xview)
+		self.tracks_preview.configure(yscrollcommand=tpy.set, xscrollcommand=tpx.set, state="disabled")
+		self.tracks_preview.grid(row=0, column=0, sticky="nsew")
+		tpy.grid(row=0, column=1, sticky="ns")
+		tpx.grid(row=1, column=0, sticky="ew")
+		ttk.Button(right, text="Regenerate Preview", command=self._refresh_tracks_preview).grid(row=2, column=0, pady=(8,0))
 
-		row_name = ttk.Frame(tab); row_name.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0,6))
-		row_name.columnconfigure(1, weight=1)
-		ttk.Label(row_name, text="Icon name (no .png):").grid(row=0, column=0, sticky="w")
-		ttk.Entry(row_name, textvariable=self.icon_base_var).grid(row=0, column=1, sticky="ew", padx=6)
-		ttk.Label(row_name, text="(theme.xml → UI/Icons/<name>)").grid(row=0, column=2, sticky="w")
+	# ---------- Build tab
+	def _build_build_tab(self, tab):
+		tab.columnconfigure(0, weight=1); tab.rowconfigure(1, weight=1)
+		ttk.Label(tab, text="Preflight / Steam Workshop Rules (read before uploading)").grid(row=0, column=0, sticky="w")
+		self.build_info = tk.Text(tab, wrap="word")
+		self._track_text(self.build_info)
+		self.build_info.grid(row=1, column=0, sticky="nsew", pady=(6,0))
+		self._update_build_panel()
+		row = ttk.Frame(tab); row.grid(row=2, column=0, sticky="e", pady=(8,0))
+		ttk.Button(row, text="🔧 Overwrite (if imported)", command=self._overwrite).pack(side="left", padx=(0,8))
+		ttk.Button(row, text="🛠 Build", command=self._build).pack(side="left")
 
-		row = ttk.Frame(tab); row.grid(row=2, column=0, columnspan=2, sticky="ew")
-		row.columnconfigure(1, weight=1)
-		ttk.Label(row, text="Icon file (.png) for this Def:").grid(row=0, column=0, sticky="w")
-		ttk.Entry(row, textvariable=self.icon_src).grid(row=0, column=1, sticky="ew", padx=6)
-		ttk.Button(row, text="Browse…", command=self._pick_def_icon).grid(row=0, column=2, sticky="w")
+	# ---------- Utilities (palette/tooltip/auto-grow/nav)
+	def _palette_color(self, key): return getattr(self, "_palette", PAL_D).get(key, "#222")
+	def _track_text(self, w: tk.Text):
+		self._tk_texts.append(w)
+		p = getattr(self, "_palette", PAL_D)
+		try: w.configure(bg=p["alt"], fg=p["fg"], insertbackground=p["fg"])
+		except: pass
+	def _repaint_texts(self):
+		p = getattr(self, "_palette", PAL_D)
+		for w in self._tk_texts:
+			try: w.configure(bg=p["alt"], fg=p["fg"], insertbackground=p["fg"])
+			except: pass
+	def _tooltip(self, widget, text: str):
+		tip = tk.Toplevel(widget); tip.withdraw(); tip.overrideredirect(True)
+		lbl = tk.Label(tip, text=text, background="#111", foreground="#eee", bd=1, relief="solid", padx=6, pady=3)
+		lbl.pack()
+		def enter(_):
+			tip.deiconify()
+			x = widget.winfo_rootx() + widget.winfo_width()//2
+			y = widget.winfo_rooty() + widget.winfo_height() + 8
+			tip.geometry(f"+{x}+{y}")
+		def leave(_): tip.withdraw()
+		widget.bind("<Enter>", enter); widget.bind("<Leave>", leave)
 
-		self.icon_preview = tk.Label(tab, bg=CLR_ALT)
-		self.icon_preview.grid(row=3, column=0, columnspan=2, pady=10, sticky="n")
+	def _auto_grow(self, txt: tk.Text, min_rows=3, max_rows=12):
+		self._auto_grow_map[txt] = (min_rows, max_rows)
+		def _fit(_evt=None):
+			lines = int(float(txt.index("end-1c").split(".")[0]))
+			txt.configure(height=max(min_rows, min(max_rows, lines)))
+		txt.bind("<KeyRelease>", _fit)
+		txt.bind("<<Paste>>", _fit)
+		self.after(50, _fit)
 
-	# ---------- Nav helpers / guards
-	def _update_nav(self):
-		i = self.tabs.index(self.tabs.select())
-		self.prev_btn.configure(state=("disabled" if i == 0 else "normal"))
-		self.next_btn.configure(state=("disabled" if i >= self.tabs.index("end")-1 else "normal"))
-
-	def _update_overwrite_enabled(self):
-		self.overwrite_btn.configure(state=("normal" if self.loaded_mod_dir else "disabled"))
-		self.loaded_from_lbl.configure(text=f"   Opened mod: {self.loaded_mod_dir}" if self.loaded_mod_dir else "   Opened mod: (none)")
-		try:
-			if self._proj_open_mod_idx is not None:
-				self.projmenu.entryconfig(self._proj_open_mod_idx, state=("normal" if self.loaded_mod_dir else "disabled"))
-		except Exception:
-			pass
-		if self.btn_open_mod:
-			self.btn_open_mod.configure(state=("normal" if self.loaded_mod_dir else "disabled"))
-		d = self._curdef()
-		real_def = bool(d and d._src_def_dir and Path(d._src_def_dir).exists())
-		if self.btn_open_def:
-			self.btn_open_def.configure(state=("normal" if real_def else "disabled"))
+	def _toggle_theme(self):
+		self._dark = not self._dark
+		self.theme_btn.configure(text="🌙" if self._dark else "☀")  # moon = dark, sun = light
+		apply_palette(self, self._dark)
+		self._repaint_texts()
+		self._refresh_previews()
 
 	def _prev_tab(self):
-		i = self.tabs.index(self.tabs.select())
-		if i > 0: self.tabs.select(i-1); self._update_nav()
-
+		i = self.nb.index(self.nb.select())
+		if i > 0: self.nb.select(i-1)
+		self._update_nav()
 	def _next_tab(self):
-		i = self.tabs.index(self.tabs.select())
-		if not self._validate_tab(i): return
-		if i == 0 and not self._ensure_at_least_one_def(): return
-		if i < self.tabs.index("end")-1:
-			self.tabs.select(i+1); self._update_nav()
+		i = self.nb.index(self.nb.select())
+		if i < self.nb.index("end")-1: self.nb.select(i+1)
+		self._update_nav()
+	def _update_nav(self):
+		i = self.nb.index(self.nb.select())
+		self.prev_btn.configure(state=("disabled" if i == 0 else "normal"))
+		self.next_btn.configure(state=("disabled" if i >= self.nb.index("end")-1 else "normal"))
 
-	def _validate_tab(self, i: int) -> bool:
-		if i == 0:
-			if self.about_name.get().strip() in ("","Music Expanded:"):
-				messagebox.showerror(APP_TITLE, "Finish the Name after “Music Expanded: ”."); return False
-			pkg = self.about_package.get().strip()
-			if not pkg.startswith("musicexpanded.") or pkg == "musicexpanded.":
-				messagebox.showerror(APP_TITLE, "Package ID must start with “musicexpanded.” and include a suffix."); return False
-			if not any(v.get() for v in self.about_versions.values()):
-				messagebox.showerror(APP_TITLE, "Select at least one Supported Version (1.3–2.0)."); return False
-		if i == 1:
-			d = self._curdef()
-			if not d or not d.tracks:
-				messagebox.showerror(APP_TITLE, "Load or add at least one track."); return False
-		return True
+	# ---------- About helpers
+	def _get_versions_lines(self):
+		return self.vers_txt.get("1.0","end").splitlines()
+	def _get_load_after_lines(self):
+		return self.load_after_txt.get("1.0","end").splitlines()
 
-	def _ensure_at_least_one_def(self) -> bool:
-		if self.defs: return True
-		while True:
-			name = simpledialog.askstring(APP_TITLE, "Create your first Def (e.g., 'Fallout Sonora')", parent=self)
-			if name is None:
-				messagebox.showerror(APP_TITLE, "You must create a Def to proceed."); return False
-			name = name.strip()
-			if not name:
-				messagebox.showerror(APP_TITLE, "Please enter a non-empty Def name."); continue
-			if any(x.label_game.strip().lower() == name.lower() for x in self.defs):
-				messagebox.showerror(APP_TITLE, "A Def with that name already exists."); continue
-			pd = ProjectDef(name)
-			self.defs.append(pd); self.cur_def_idx.set(0)
-			self._refresh_all_def_combos(); self._load_def_into_fields(pd)
-			return True
+	# ---------- Def controls (in Theme tab)
+	def _refresh_all_def_controls(self):
+		names = [d.label_game for d in self.defs]
+		self.def_combo.configure(values=names)
+		if 0 <= self.cur_def_idx.get() < len(names):
+			self.def_combo.current(self.cur_def_idx.get())
+		elif names:
+			self.cur_def_idx.set(0); self.def_combo.current(0)
+		else:
+			self.def_combo.set("")
+
+		d = self._curdef()
+		if d:
+			self.game_label.set(d.label_game)
+			self.game_code.set(d.game_code)
+			self.content_folder.set(d.content_folder)
+			self.label_prefix.set(d.label_prefix)
+			self.theme_desc_txt.delete("1.0","end"); self.theme_desc_txt.insert("1.0", d.theme_description)
+			self.def_folder_lbl.configure(text=f"Def folder: {d._src_def_dir}" if d._src_def_dir else "Def folder: (new/not from disk)")
+		else:
+			self.game_label.set(""); self.game_code.set(""); self.content_folder.set(""); self.label_prefix.set("")
+			self.theme_desc_txt.delete("1.0","end"); self.def_folder_lbl.configure(text="Def folder: (none)")
+
+		self._refresh_tracks_table(); self._refresh_previews()
+		self._update_toolbar_states()
+
+	def _on_def_combo_select(self, _evt=None):
+		val = self.def_combo.get()
+		for i, d in enumerate(self.defs):
+			if d.label_game == val:
+				self.cur_def_idx.set(i)
+				self._refresh_all_def_controls()
+				return
+
+	def _add_def(self):
+		name = simpledialog.askstring(APP_TITLE, "New Def name")
+		if name is None: return
+		name = name.strip()
+		if not name:
+			messagebox.showerror(APP_TITLE, "Please enter a non-empty Def name."); return
+		if any(x.label_game.strip().lower() == name.lower() for x in self.defs):
+			messagebox.showerror(APP_TITLE, "A Def with that name already exists."); return
+		pd = ProjectDef(name)
+		self.defs.append(pd)
+		self.cur_def_idx.set(len(self.defs)-1)
+		self._refresh_all_def_controls()
+
+	def _dup_def(self):
+		d = self._curdef()
+		if not d: return
+		import copy
+		new = copy.deepcopy(d)
+		new.label_game = d.label_game + " (Copy)"
+		self.defs.append(new)
+		self.cur_def_idx.set(len(self.defs)-1)
+		self._refresh_all_def_controls()
+
+	def _rename_def(self):
+		d = self._curdef()
+		if not d: return
+		name = simpledialog.askstring(APP_TITLE, "Rename Def", initialvalue=d.label_game)
+		if name is None: return
+		name = name.strip()
+		if not name:
+			messagebox.showerror(APP_TITLE, "Please enter a non-empty Def name."); return
+		if any(x is not d and x.label_game.strip().lower() == name.lower() for x in self.defs):
+			messagebox.showerror(APP_TITLE, "A Def with that name already exists."); return
+		d.label_game = name
+		if not d.game_code: d.game_code = infer_game_code(name)
+		if not d.content_folder: d.content_folder = sanitize_simple(name)
+		self._refresh_all_def_controls()
+
+	def _delete_def(self):
+		if not self.defs: return
+		idx = self.cur_def_idx.get()
+		name = self.defs[idx].label_game
+		if not messagebox.askyesno(APP_TITLE, f"Delete Def “{name}”?"): return
+		self.defs.pop(idx)
+		self.cur_def_idx.set(max(0, idx-1) if self.defs else -1)
+		self._refresh_all_def_controls()
+
+	def _on_core_changed(self, *_):
+		d = self._curdef()
+		if not d: return
+		d.label_game = self.game_label.get().strip() or d.label_game
+		d.game_code = self.game_code.get().strip() or d.game_code
+		d.content_folder = self.content_folder.get().strip() or d.content_folder
+		d.label_prefix = self.label_prefix.get()
+		d.theme_description = self.theme_desc_txt.get("1.0","end").strip() or d.theme_description
+		self._refresh_previews()
+
+	# ---------- Tracks
+	def _add_tracks_from_folder(self):
+		d = self._curdef()
+		if not d:
+			messagebox.showerror(APP_TITLE, "Create/select a Def first."); return
+		root = filedialog.askdirectory(title="Add folder of .ogg files (recursive)")
+		if not root: return
+		files = sorted(Path(root).rglob("*.ogg"), key=lambda p: p.as_posix().lower())
+		if not files:
+			messagebox.showerror(APP_TITLE, "No .ogg found in that folder."); return
+		start = max([t.idx for t in d.tracks], default=0) + 1
+		for j, p in enumerate(files):
+			disp = infer_title_from_filename(p.name, d.label_game, d.content_folder)
+			filet = sanitize_component(disp)
+			d.tracks.append(Track(start+j, p, disp, filet))
+		self._refresh_tracks_table(); self._refresh_previews()
+
+	def _add_track_files(self):
+		d = self._curdef()
+		if not d:
+			messagebox.showerror(APP_TITLE, "Create/select a Def first."); return
+		fs = filedialog.askopenfilenames(title="Add .ogg files", filetypes=[("OGG","*.ogg")])
+		if not fs: return
+		start = max([t.idx for t in d.tracks], default=0) + 1
+		for j, fp in enumerate(fs):
+			p = Path(fp)
+			disp = infer_title_from_filename(p.name, d.label_game, d.content_folder)
+			filet = sanitize_component(disp)
+			d.tracks.append(Track(start+j, p, disp, filet))
+		self._refresh_tracks_table(); self._refresh_previews()
+
+	def _refresh_tracks_table(self):
+		if not hasattr(self, "tracks_tree"): return
+		for iid in self.tracks_tree.get_children(): self.tracks_tree.delete(iid)
+		d = self._curdef()
+		if not d: return
+		for t in d.tracks:
+			self.tracks_tree.insert("", "end",
+				values=(f"{t.idx:03d}", t.path.name, t.display_title, ", ".join(u.summary() for u in t.uses)))
+
+	def _on_track_select(self):
+		t = self._current_track()
+		if not t: return
+		self.track_label.set(t.display_title)
+		for b in self.biome_vars: self.biome_vars[b].set(False)
+
+	def _current_track(self) -> Track|None:
+		d = self._curdef(); sel = self.tracks_tree.selection() if hasattr(self, "tracks_tree") else []
+		if not d or not sel: return None
+		idx = int(self.tracks_tree.item(sel[0], "values")[0])
+		for t in d.tracks:
+			if t.idx == idx: return t
+		return None
+
+	def _selected_tracks(self):
+		d = self._curdef()
+		if not d or not hasattr(self, "tracks_tree"): return []
+		sels = self.tracks_tree.selection()
+		if not sels:
+			t = self._current_track()
+			return [t] if t else []
+		idxs = {int(self.tracks_tree.item(i, "values")[0]) for i in sels}
+		return [t for t in d.tracks if t.idx in idxs]
+
+	def _collect_biomes_from_ui(self):
+		return [b for b,v in self.biome_vars.items() if v.get()]
+
+	def _on_track_label_changed(self, *_):
+		txt = self.track_label.get().strip()
+		if not txt: return
+		for t in self._selected_tracks():
+			t.display_title = txt
+		self._refresh_tracks_table(); self._refresh_previews()
+
+	def _apply_queue(self):
+		targets = self._selected_tracks()
+		if not targets:
+			messagebox.showinfo(APP_TITLE, "Select one or more tracks."); return
+		cue_disp = self.cue_choice.get()
+		if cue_disp == "Ambient":
+			new_use_proto = TrackUse(None, "", self._collect_biomes_from_ui())
+		elif cue_disp == "Custom":
+			cd = self.cue_data.get().strip()
+			if not cd:
+				messagebox.showerror(APP_TITLE, "cueData required for Custom."); return
+			new_use_proto = TrackUse("Custom", cd, self._collect_biomes_from_ui())
+		else:
+			new_use_proto = TrackUse(cue_disp, "", self._collect_biomes_from_ui())
+
+		new_right_label = self.track_label.get().strip()
+
+		for t in targets:
+			new_use = TrackUse(new_use_proto.cue_type, new_use_proto.cue_data, list(new_use_proto.allowed_biomes))
+			if self.replace_ambient.get() and len(t.uses)==1 and t.uses[0].cue_type is None and new_use.cue_type is not None:
+				t.uses[0] = new_use
+			else:
+				def matches(u: TrackUse):
+					if new_use.cue_type is None: return u.cue_type is None
+					if new_use.cue_type == "Custom": return u.cue_type=="Custom" and u.cue_data==new_use.cue_data
+					return u.cue_type == new_use.cue_type
+				for i,u in enumerate(list(t.uses)):
+					if matches(u):
+						t.uses[i] = new_use
+						break
+				else:
+					t.uses.append(new_use)
+			if new_right_label:
+				t.display_title = new_right_label
+
+		self._refresh_tracks_table(); self._refresh_previews()
+
+	def _remove_queue(self):
+		targets = self._selected_tracks()
+		if not targets:
+			messagebox.showinfo(APP_TITLE, "Select one or more tracks."); return
+		cue_disp = self.cue_choice.get(); cd = self.cue_data.get().strip()
+		for t in targets:
+			def idx_for():
+				if cue_disp == "Ambient":
+					for i,u in enumerate(t.uses):
+						if u.cue_type is None: return i
+				elif cue_disp == "Custom":
+					for i,u in enumerate(t.uses):
+						if u.cue_type=="Custom" and u.cue_data==cd: return i
+				else:
+					for i,u in enumerate(t.uses):
+						if u.cue_type == cue_disp: return i
+				return -1
+			i = idx_for()
+			if i >= 0:
+				t.uses.pop(i)
+				if not t.uses:
+					t.uses = [TrackUse()]
+		self._refresh_tracks_table(); self._refresh_previews()
+
+	# ---------- Previews
+	def _refresh_tracks_preview(self):
+		d = self._curdef()
+		xml = build_tracks_xml(d) if d else "<!-- No Def selected -->\n"
+		self.tracks_preview.configure(state="normal"); self.tracks_preview.delete("1.0","end"); self.tracks_preview.insert("1.0", xml); self.tracks_preview.configure(state="disabled")
+	def _refresh_theme_preview(self):
+		d = self._curdef()
+		xml = build_theme_xml(d) if d else "<!-- No Def selected -->\n"
+		self.theme_preview.configure(state="normal"); self.theme_preview.delete("1.0","end"); self.theme_preview.insert("1.0", xml); self.theme_preview.configure(state="disabled")
+	def _refresh_previews(self):
+		if hasattr(self, "tracks_preview"): self._refresh_tracks_preview()
+		if hasattr(self, "theme_preview"):  self._refresh_theme_preview()
+		self._update_build_panel()
+
+	# ---------- Build panel
+	def _update_build_panel(self):
+		lines = []
+		lines.append("BUILD PREFLIGHT SUMMARY\n")
+		if not self.defs:
+			lines.append("- No Defs created.\n")
+		else:
+			for d in self.defs:
+				a=m=b=cu=0
+				for t in d.tracks:
+					for u in t.uses:
+						if u.cue_type is None: a+=1
+						elif u.cue_type in ("MainMenu","Credits"): m+=1
+						elif u.cue_type in BATTLE_CUES: b+=1
+						elif u.cue_type=="Custom": cu+=1
+				lines.append(f"- {d.label_game}: ambient {a}, main/credits {m}, battle {b}, custom {cu}\n")
+		lines.append("\nSTEAM WORKSHOP CONTENT & COMMUNITY RULES (brief)\n")
+		lines.append("• Only upload content you own or have permission to use.\n")
+		lines.append("• No malware, scams, or illegal content; respect local laws.\n")
+		lines.append("• No harassment/hate speech; follow DMCA takedowns.\n")
+		lines.append("• Provide accurate descriptions/tags; avoid spam.\n")
+		self.build_info.configure(state="normal"); self.build_info.delete("1.0","end"); self.build_info.insert("1.0","".join(lines)); self.build_info.configure(state="disabled")
 
 	# ---------- Project save/open
 	def _serialize(self):
@@ -791,8 +1023,8 @@ class App(tk.Tk):
 				"name": self.about_name.get(),
 				"author": self.about_author.get(),
 				"package": self.about_package.get(),
-				"versions": [v for v,b in self.about_versions.items() if b.get()],
-				"load_after": self.about_load_after.get(),
+				"versions_text": self.vers_txt.get("1.0","end"),
+				"load_after_text": self.load_after_txt.get("1.0","end"),
 				"description": self.desc_txt.get("1.0","end"),
 				"preview": self.preview_src.get(),
 				"modicon": self.modicon_src.get(),
@@ -801,9 +1033,8 @@ class App(tk.Tk):
 				"label_game": d.label_game,
 				"game_code": d.game_code,
 				"content_folder": d.content_folder,
-				"icon_base": d.icon_base,
-				"icon_src": d.icon_src,
 				"label_prefix": d.label_prefix,
+				"theme_description": d.theme_description,
 				"tracks": [{
 					"idx": t.idx,
 					"path": str(t.path),
@@ -819,40 +1050,30 @@ class App(tk.Tk):
 		}
 
 	def _load_from_dict(self, data: dict):
-		# About
 		a = data.get("about", {})
 		self.about_name.set(a.get("name","Music Expanded: "))
 		self.about_author.set(a.get("author",""))
 		self.about_package.set(a.get("package","musicexpanded."))
-		for v in self.about_versions.values(): v.set(False)
-		for v in a.get("versions", []):
-			if v in self.about_versions: self.about_versions[v].set(True)
-		self.about_load_after.set(a.get("load_after",""))
+		self.vers_txt.delete("1.0","end"); self.vers_txt.insert("1.0", a.get("versions_text", self.about_versions_text_default))
+		self.load_after_txt.delete("1.0","end"); self.load_after_txt.insert("1.0", a.get("load_after_text", self.about_load_after_default))
 		self.desc_txt.delete("1.0","end"); self.desc_txt.insert("1.0", a.get("description",""))
-		self.preview_src.set(a.get("preview",""))
-		self.modicon_src.set(a.get("modicon",""))
+		self.preview_src.set(a.get("preview","")); self.modicon_src.set(a.get("modicon",""))
 
-		# Defs
 		self.defs.clear()
 		for d in data.get("defs", []):
 			pd = ProjectDef(d.get("label_game",""))
 			pd.game_code = d.get("game_code", pd.game_code)
 			pd.content_folder = d.get("content_folder", pd.content_folder)
-			pd.icon_base = d.get("icon_base", pd.icon_base)
-			pd.icon_src = d.get("icon_src", "")
-			pd.label_prefix = d.get("label_prefix", pd.label_game)
+			pd.label_prefix = d.get("label_prefix","")
+			pd.theme_description = d.get("theme_description", pd.theme_description)
 			for t in d.get("tracks", []):
 				tr = Track(t["idx"], Path(t["path"]), t["display_title"], t["file_title"])
-				tr.uses = [TrackUse(u["cue_type"], u.get("cue_data",""), u.get("allowed_biomes",[])) for u in t.get("uses",[])]
+				tr.uses = [TrackUse(u.get("cue_type"), u.get("cue_data",""), u.get("allowed_biomes",[])) for u in t.get("uses",[])]
 				if not tr.uses: tr.uses=[TrackUse()]
 				pd.tracks.append(tr)
 			self.defs.append(pd)
 		self.cur_def_idx.set(0 if self.defs else -1)
-		self._refresh_all_def_combos()
-		if self.defs:
-			self._load_def_into_fields(self.defs[0])
-		self._refresh_all_previews(); self._refresh_icon_preview()
-		self._update_overwrite_enabled()
+		self._refresh_all_def_controls()
 
 	def _save_project(self):
 		p = filedialog.asksaveasfilename(defaultextension=".mefproj", filetypes=[("MEF Project",".mefproj")])
@@ -877,23 +1098,18 @@ class App(tk.Tk):
 		self.about_name.set("Music Expanded: ")
 		self.about_author.set("karbonpanzer")
 		self.about_package.set("musicexpanded.")
-		for v in self.about_versions.values(): v.set(False)
-		self.about_versions["1.6"].set(True); self.about_versions["2.0"].set(True)
-		self.about_load_after.set("musicexpanded.framework\nVanillaExpanded.VEE")
+		self.vers_txt.delete("1.0","end"); self.vers_txt.insert("1.0", self.about_versions_text_default)
+		self.load_after_txt.delete("1.0","end"); self.load_after_txt.insert("1.0", self.about_load_after_default)
+		self.desc_txt.delete("1.0","end"); self.desc_txt.insert("1.0", "Put your About description here (wrapped in CDATA).")
 		self.preview_src.set(""); self.modicon_src.set("")
-		self.game_label.set(""); self.game_code.set(""); self.content_folder.set(""); self.label_prefix.set("")
-		self.icon_src.set(""); self.icon_base_var.set("")
-		self._refresh_all_def_combos(); self._refresh_tracks_table(); self._refresh_all_previews()
-		self._refresh_icon_preview(); self._update_overwrite_enabled()
-		self.def_folder_lbl.configure(text="Def folder: (none)")
+		self._refresh_all_def_controls()
 
 	def _open_mod_folder(self):
-		root = filedialog.askdirectory(title="Open MEF Mod Folder")
+		root = filedialog.askdirectory(title="Import MEF Mod Folder")
 		if not root: return
 		mod = Path(root)
 		about_dir = mod / "About"
 		defs_dir = mod / "Defs"
-		textures_root = mod / "Textures" / "UI" / "Icons"
 		if not about_dir.exists() or not defs_dir.exists():
 			messagebox.showerror(APP_TITLE, "This doesn’t look like a MEF mod (missing About/ or Defs/)."); return
 
@@ -902,392 +1118,44 @@ class App(tk.Tk):
 			self.about_name.set(info["name"] or "Music Expanded: ")
 			self.about_author.set(info["author"] or "karbonpanzer")
 			self.about_package.set(info["packageId"] or "musicexpanded.")
-			for v in self.about_versions.values(): v.set(False)
-			for v in info["versions"]:
-				if v in self.about_versions: self.about_versions[v].set(True)
-			self.about_load_after.set("\n".join(info["load_after"]) if info["load_after"] else "musicexpanded.framework\nVanillaExpanded.VEE")
+			self.vers_txt.delete("1.0","end"); self.vers_txt.insert("1.0", "\n".join(info["versions"]) if info["versions"] else self.about_versions_text_default)
+			self.load_after_txt.delete("1.0","end"); self.load_after_txt.insert("1.0", "\n".join(info["load_after"]) if info["load_after"] else self.about_load_after_default)
 			self.desc_txt.delete("1.0","end"); self.desc_txt.insert("1.0", info["description"] or "")
-			if info["preview"]: self.preview_src.set(str(info["preview"]))
-			if info["modicon"]: self.modicon_src.set(str(info["modicon"]))
 
 		new_defs = []
 		for child in sorted(defs_dir.iterdir()):
 			if not child.is_dir(): continue
 			if child.name.lower() == "patches": continue
-			pd = parse_def_folder(child, textures_root)
-			if pd:
-				pd._src_def_dir = child
-				new_defs.append(pd)
+			pd = parse_def_folder(child)
+			if pd: new_defs.append(pd)
 
 		if not new_defs:
 			messagebox.showerror(APP_TITLE, "No valid Defs found (need Defs/<Something>/tracks.xml + theme.xml)."); return
 
 		self.defs = new_defs; self.cur_def_idx.set(0); self.loaded_mod_dir = mod
-		self._refresh_all_def_combos(); self._load_def_into_fields(self.defs[0])
-		self._update_overwrite_enabled()
+		self._refresh_all_def_controls()
+		self._update_toolbar_states()
 		messagebox.showinfo(APP_TITLE, f"Loaded {len(self.defs)} def(s) from:\n{mod}")
 
-	def _open_loaded_mod_folder(self):
-		if not self.loaded_mod_dir:
-			messagebox.showerror(APP_TITLE, "No mod is currently opened."); return
-		self._open_folder(self.loaded_mod_dir)
-
-	def _open_current_def_folder(self):
-		d = self._curdef()
-		if not d or not d._src_def_dir:
-			messagebox.showerror(APP_TITLE, "The current Def doesn’t have an on-disk folder (open a mod or build first).")
-			return
-		self._open_folder(d._src_def_dir)
-
-	# ---------- Def handling
-	def _refresh_all_def_combos(self):
-		names = [d.label_game for d in self.defs]
-		self.def_combo.configure(values=names)
-		if 0 <= self.cur_def_idx.get() < len(names):
-			self.def_combo.current(self.cur_def_idx.get())
-		elif names:
-			self.cur_def_idx.set(0); self.def_combo.current(0)
-		else:
-			self.def_combo.set("")
-		self.icon_def_combo.configure(values=names)
-		if 0 <= self.cur_def_idx.get() < len(names):
-			self.icon_def_combo.current(self.cur_def_idx.get())
-		elif names:
-			self.icon_def_combo.current(0)
-		else:
-			self.icon_def_combo.set("")
-
-	def _on_def_combo_select(self, _evt=None):
-		val = self.def_combo.get()
-		for i, d in enumerate(self.defs):
-			if d.label_game == val:
-				self.cur_def_idx.set(i)
-				self._load_def_into_fields(d)
-				self.icon_def_combo.current(i)
-				return
-
-	def _on_icon_def_select(self, _evt=None):
-		val = self.icon_def_combo.get()
-		for i, d in enumerate(self.defs):
-			if d.label_game == val:
-				self.cur_def_idx.set(i)
-				self._load_def_into_fields(d)
-				self.def_combo.current(i)
-				return
-
-	def _load_def_into_fields(self, d: ProjectDef):
-		self.game_label.set(d.label_game)
-		self.game_code.set(d.game_code)
-		self.content_folder.set(d.content_folder)
-		self.label_prefix.set(d.label_prefix or d.label_game)
-		self.icon_src.set(d.icon_src or "")
-		self.icon_base_var.set(d.icon_base or d.content_folder or "")
-		self._refresh_tracks_table(); self._refresh_all_previews()
-		self._refresh_icon_preview()
-		self.def_folder_lbl.configure(text=f"Def folder: {d._src_def_dir}" if d._src_def_dir else "Def folder: (new/not from disk)")
-		self._update_overwrite_enabled()
-
-	def _add_def(self):
-		name = simpledialog.askstring(APP_TITLE, "New Def name")
-		if name is None: return
-		name = name.strip()
-		if not name:
-			messagebox.showerror(APP_TITLE, "Please enter a non-empty Def name."); return
-		if any(x.label_game.strip().lower() == name.lower() for x in self.defs):
-			messagebox.showerror(APP_TITLE, "A Def with that name already exists."); return
-		pd = ProjectDef(name)
-		self.defs.append(pd)
-		self.cur_def_idx.set(len(self.defs)-1)
-		self._refresh_all_def_combos(); self._load_def_into_fields(pd)
-
-	def _rename_def(self):
-		d = self._curdef()
-		if not d: return
-		name = simpledialog.askstring(APP_TITLE, "Rename Def", initialvalue=d.label_game)
-		if name is None: return
-		name = name.strip()
-		if not name:
-			messagebox.showerror(APP_TITLE, "Please enter a non-empty Def name."); return
-		if any(x is not d and x.label_game.strip().lower() == name.lower() for x in self.defs):
-			messagebox.showerror(APP_TITLE, "A Def with that name already exists."); return
-		d.label_game = name
-		if not d.game_code: d.game_code = infer_game_code(name)
-		if not d.content_folder: d.content_folder = sanitize_simple(name)
-		if not d.icon_base: d.icon_base = d.content_folder
-		if not d.label_prefix: d.label_prefix = d.label_game
-		self._refresh_all_def_combos(); self._load_def_into_fields(d)
-
-	def _delete_def(self):
-		if not self.defs: return
-		idx = self.cur_def_idx.get()
-		name = self.defs[idx].label_game
-		if not messagebox.askyesno(APP_TITLE, f"Delete Def “{name}”?"): return
-		self.defs.pop(idx)
-		if not self.defs:
-			self.cur_def_idx.set(-1)
-			self._refresh_all_def_combos()
-			self.game_label.set(""); self.game_code.set(""); self.content_folder.set(""); self.label_prefix.set("")
-			self.icon_src.set(""); self.icon_base_var.set("")
-			self._refresh_tracks_table(); self._refresh_all_previews(); self._refresh_icon_preview()
-			self.def_folder_lbl.configure(text="Def folder: (none)")
-			self._update_overwrite_enabled()
-			return
-		self.cur_def_idx.set(max(0, idx-1))
-		self._refresh_all_def_combos(); self._load_def_into_fields(self.defs[self.cur_def_idx.get()])
-
-	def _on_core_changed(self, *_):
-		d = self._curdef()
-		if not d: return
-		d.label_game = self.game_label.get().strip() or d.label_game
-		d.game_code = self.game_code.get().strip() or d.game_code
-		d.content_folder = self.content_folder.get().strip() or d.content_folder
-		d.label_prefix = (self.label_prefix.get().strip() or d.label_game)
-		self._refresh_all_def_combos()
-		self._load_def_into_fields(d)
-
-	# ---------- file pickers & icon preview
-	def _pick_out_root(self):
-		p = filedialog.askdirectory(title="Pick output folder")
-		if p: self.out_root.set(p)
-	def _pick_preview(self):
-		p = filedialog.askopenfilename(title="Pick Preview.png", filetypes=[("PNG","*.png")])
-		if p: self.preview_src.set(p)
-	def _pick_modicon(self):
-		p = filedialog.askopenfilename(title="Pick modicon.png", filetypes=[("PNG","*.png")])
-		if p: self.modicon_src.set(p)
-	def _pick_def_icon(self):
-		p = filedialog.askopenfilename(title="Pick Def icon (.png)", filetypes=[("PNG","*.png")])
-		if not p: return
-		self.icon_src.set(p)
-		d = self._curdef()
-		if d:
-			d.icon_src = p
-			self._refresh_icon_preview()
-
-	def _refresh_icon_preview(self):
-		d = self._curdef()
-		if d:
-			base = self.icon_base_var.get().strip() or d.content_folder or d.icon_base
-			d.icon_base = base
-		p = self.icon_src.get().strip()
-		if not p or not Path(p).exists():
-			self.icon_preview.configure(image="", text="(No icon selected)", fg=CLR_FG, bg=CLR_ALT)
-			return
-		try:
-			img = tk.PhotoImage(file=p)
-			w, h = img.width(), img.height()
-			f = max(w/256, h/256, 1); f = int(math.ceil(f))
-			if f > 1: img = img.subsample(f, f)
-			self._icon_photo = img
-			self.icon_preview.configure(image=self._icon_photo, text="", bg=CLR_ALT)
-		except Exception as e:
-			self.icon_preview.configure(image="", text=f"(Preview failed: {e})", fg=CLR_FG, bg=CLR_ALT)
-
-	# ---------- tracks loading
-	def _add_tracks_from_folder(self):
-		d = self._curdef()
-		if not d:
-			messagebox.showerror(APP_TITLE, "Create/select a Def first."); return
-		root = filedialog.askdirectory(title="Add folder of .ogg files (recursive)")
-		if not root: return
-		files = sorted(Path(root).rglob("*.ogg"), key=lambda p: p.as_posix().lower())
-		if not files:
-			messagebox.showerror(APP_TITLE, "No .ogg found in that folder."); return
-		start = max([t.idx for t in d.tracks], default=0) + 1
-		for j, p in enumerate(files):
-			disp = infer_title_from_filename(p.name, d.label_game, d.content_folder)
-			filet = sanitize_component(disp)
-			d.tracks.append(Track(start+j, p, disp, filet))
-		self._refresh_tracks_table(); self._refresh_all_previews()
-
-	def _add_track_files(self):
-		d = self._curdef()
-		if not d:
-			messagebox.showerror(APP_TITLE, "Create/select a Def first."); return
-		fs = filedialog.askopenfilenames(title="Add .ogg files", filetypes=[("OGG","*.ogg")])
-		if not fs: return
-		start = max([t.idx for t in d.tracks], default=0) + 1
-		for j, fp in enumerate(fs):
-			p = Path(fp)
-			disp = infer_title_from_filename(p.name, d.label_game, d.content_folder)
-			filet = sanitize_component(disp)
-			d.tracks.append(Track(start+j, p, disp, filet))
-		self._refresh_tracks_table(); self._refresh_all_previews()
-
-	# ---------- table/editor sync
-	def _refresh_tracks_table(self):
-		for iid in self.tracks_tree.get_children(): self.tracks_tree.delete(iid)
-		d = self._curdef()
-		if not d: return
-		for t in d.tracks:
-			self.tracks_tree.insert("", "end",
-				values=(f"{t.idx:03d}", t.path.name, t.display_title, ", ".join(u.summary() for u in t.uses)))
-
-	def _on_track_select(self):
-		t = self._current_track()
-		if not t: return
-		self.track_label.set(t.display_title)
-		for b in self.biome_vars: self.biome_vars[b].set(False)
-
-	def _current_track(self) -> Track|None:
-		d = self._curdef(); sel = self.tracks_tree.selection()
-		if not d or not sel: return None
-		idx = int(self.tracks_tree.item(sel[0], "values")[0])
-		for t in d.tracks:
-			if t.idx == idx: return t
-		return None
-
-	def _selected_tracks(self):
-		d = self._curdef()
-		if not d: return []
-		sels = self.tracks_tree.selection()
-		if not sels:
-			t = self._current_track()
-			return [t] if t else []
-		idxs = {int(self.tracks_tree.item(i, "values")[0]) for i in sels}
-		return [t for t in d.tracks if t.idx in idxs]
-
-	def _collect_biomes_from_ui(self):
-		return [b for b,v in self.biome_vars.items() if v.get()]
-
-	# ---------- Apply Cue / Remove Cue (bulk-aware)
-	def _apply_queue(self):
-		targets = self._selected_tracks()
-		if not targets:
-			messagebox.showinfo(APP_TITLE, "Select one or more tracks."); return
-		cue_disp = self.cue_choice.get()
-		if cue_disp == "Ambient":
-			new_use_proto = TrackUse(None, "", self._collect_biomes_from_ui())
-		elif cue_disp == "Custom":
-			cd = self.cue_data.get().strip()
-			if not cd:
-				messagebox.showerror(APP_TITLE, "cueData required for Custom."); return
-			new_use_proto = TrackUse("Custom", cd, self._collect_biomes_from_ui())
-		else:
-			new_use_proto = TrackUse(cue_disp, "", self._collect_biomes_from_ui())
-
-		new_right_label = self.track_label.get().strip()
-
-		for t in targets:
-			new_use = TrackUse(new_use_proto.cue_type, new_use_proto.cue_data, list(new_use_proto.allowed_biomes))
-
-			if self.replace_ambient.get() and len(t.uses)==1 and t.uses[0].cue_type is None and new_use.cue_type is not None:
-				t.uses[0] = new_use
-			else:
-				def matches(u: TrackUse):
-					if new_use.cue_type is None: return u.cue_type is None
-					if new_use.cue_type == "Custom": return u.cue_type=="Custom" and u.cue_data==new_use.cue_data
-					return u.cue_type == new_use.cue_type
-				for i,u in enumerate(list(t.uses)):
-					if matches(u):
-						t.uses[i] = new_use
-						break
-				else:
-					t.uses.append(new_use)
-
-			if new_right_label:
-				t.display_title = new_right_label
-
-		self._refresh_tracks_table(); self._refresh_all_previews()
-
-	def _remove_queue(self):
-		targets = self._selected_tracks()
-		if not targets:
-			messagebox.showinfo(APP_TITLE, "Select one or more tracks."); return
-		cue_disp = self.cue_choice.get()
-		cd = self.cue_data.get().strip()
-
-		for t in targets:
-			def idx_for():
-				if cue_disp == "Ambient":
-					for i,u in enumerate(t.uses):
-						if u.cue_type is None: return i
-				elif cue_disp == "Custom":
-					for i,u in enumerate(t.uses):
-						if u.cue_type=="Custom" and u.cue_data==cd: return i
-				else:
-					for i,u in enumerate(t.uses):
-						if u.cue_type == cue_disp: return i
-				return -1
-			i = idx_for()
-			if i >= 0:
-				t.uses.pop(i)
-				if not t.uses:
-					t.uses = [TrackUse()]
-
-		self._refresh_tracks_table(); self._refresh_all_previews()
-
-	# ---------- previews
-	def _refresh_tracks_preview(self):
-		d = self._curdef()
-		xml = build_tracks_xml(d) if d else "<!-- No Def selected -->\n"
-		self.preview_tracks.configure(state="normal"); self.preview_tracks.delete("1.0","end"); self.preview_tracks.insert("1.0", xml); self.preview_tracks.configure(state="disabled")
-	def _refresh_theme_preview(self):
-		d = self._curdef()
-		xml = build_theme_xml(d, f"{d.label_game} music integrated via the Music Expanded Framework.") if d else "<!-- No Def selected -->\n"
-		self.preview_theme.configure(state="normal"); self.preview_theme.delete("1.0","end"); self.preview_theme.insert("1.0", xml); self.preview_theme.configure(state="disabled")
-	def _refresh_all_previews(self):
-		self._refresh_tracks_preview(); self._refresh_theme_preview()
-
-	# ---------- helpers
-	def _curdef(self) -> ProjectDef|None:
-		idx = self.cur_def_idx.get()
-		return self.defs[idx] if 0 <= idx < len(self.defs) else None
-
-	def _open_folder(self, path: Path|None):
-		if not path: return
-		try:
-			if sys.platform.startswith("win"): os.startfile(path)        # type: ignore
-			elif sys.platform == "darwin": subprocess.run(["open", str(path)], check=False)
-			else: subprocess.run(["xdg-open", str(path)], check=False)
-		except Exception:
-			pass
-
-	# ---------- Preflight
-	def _preflight_report(self, overwrite=False):
+	# ---------- Build & Overwrite
+	def _preflight_ok(self, overwrite=False):
 		issues = []
-		# About basics
 		if self.about_name.get().strip() in ("","Music Expanded:"):
 			issues.append("About: Name incomplete.")
 		pkg = self.about_package.get().strip()
 		if not pkg.startswith("musicexpanded.") or pkg == "musicexpanded.":
 			issues.append("About: Package ID invalid (must start with musicexpanded.).")
-		if not any(v.get() for v in self.about_versions.values()):
-			issues.append("About: No supported versions checked.")
-		# Icons (skip for overwrite)
-		if not overwrite:
-			about_modicon = self.modicon_src.get().strip()
-			missing_icons = [d.label_game for d in self.defs if not (d.icon_src or about_modicon)]
-			if missing_icons:
-				issues.append("Icon missing for: " + ", ".join(missing_icons))
-		# Defs/tracks
-		if not self.defs:
-			issues.append("No Defs created.")
+		vers = [v.strip() for v in self._get_versions_lines() if v.strip()]
+		if not vers: issues.append("About: No supported versions entered.")
+		if not self.defs: issues.append("No Defs created.")
 		for d in self.defs:
 			if not d.tracks: issues.append(f"Def '{d.label_game}': no tracks.")
-		# Stats
-		stats = []
-		for d in self.defs:
-			a=m=b=cu=0
-			for t in d.tracks:
-				for u in t.uses:
-					if u.cue_type is None: a+=1
-					elif u.cue_type in ("MainMenu","Credits"): m+=1
-					elif u.cue_type in BATTLE_CUES: b+=1
-					elif u.cue_type=="Custom": cu+=1
-			stats.append(f"{d.label_game}: ambient {a}, main/credits {m}, battle {b}, custom {cu}")
-		msg = ("OVERWRITE" if overwrite else "BUILD") + " preflight\n\n" + ("\n".join(stats) if stats else "(no defs)")
 		if issues:
-			msg += "\n\nIssues:\n- " + "\n- ".join(issues)
-			msg += "\n\nProceed anyway?"
-			return messagebox.askyesno(APP_TITLE, msg)
-		else:
-			return messagebox.askyesno(APP_TITLE, msg + "\n\nLooks good. Proceed?")
+			return messagebox.askyesno(APP_TITLE, "Issues:\n- " + "\n- ".join(issues) + "\n\nProceed anyway?")
+		return True
 
-	# ---------- Build
 	def _build(self):
-		if not self._preflight_report(overwrite=False): return
-
+		if not self._preflight_ok(False): return
 		outroot = Path(self.out_root.get().strip()); outroot.mkdir(parents=True, exist_ok=True)
 		mod_name = simpledialog.askstring(APP_TITLE, "Name the output mod folder")
 		if not mod_name: return
@@ -1300,38 +1168,29 @@ class App(tk.Tk):
 		# About
 		about_dir = mod_dir / "About"; about_dir.mkdir(parents=True, exist_ok=True)
 		desc = self.desc_txt.get("1.0","end").strip()
-		versions = [v for v,b in self.about_versions.items() if b.get()]
-		la_lines = [ln for ln in self.about_load_after.get().splitlines() if ln.strip()]
+		vers_lines = self._get_versions_lines()
+		la_lines = self._get_load_after_lines()
 		about_xml = build_about_xml(self.about_name.get().strip(), desc, self.about_author.get().strip(),
-			self.about_package.get().strip(), versions, la_lines)
+			self.about_package.get().strip(), vers_lines, la_lines)
 		(about_dir / "About.xml").write_text(about_xml, encoding="utf-8", newline="\n")
 		if self.preview_src.get().strip(): shutil.copy2(self.preview_src.get().strip(), about_dir / "Preview.png")
 		if self.modicon_src.get().strip(): shutil.copy2(self.modicon_src.get().strip(), about_dir / "modicon.png")
 
 		# Folders
 		defs_root = mod_dir / "Defs"; defs_root.mkdir(parents=True, exist_ok=True)
-		sounds_root = mod_dir / "Sounds" / "MusicExpanded"
-		textures_root = mod_dir / "Textures" / "UI" / "Icons"; textures_root.mkdir(parents=True, exist_ok=True)
+		sounds_root = mod_dir / "Sounds" / "MusicExpanded"; sounds_root.mkdir(parents=True, exist_ok=True)
 
-		# build each Def
 		dest_folders = set()
 		for d in self.defs:
-			if not (d.icon_src or self.modicon_src.get().strip()):
-				messagebox.showerror(APP_TITLE, f"Missing icon for Def: {d.label_game}"); return
-
 			dfolder_name = sanitize_simple(d.label_game) or d.content_folder or "Game"
 			if dfolder_name in dest_folders:
-				messagebox.showerror(APP_TITLE, f"Duplicate Def folder name would be created: {dfolder_name}\nRename one of your Defs."); return
+				messagebox.showerror(APP_TITLE, f"Duplicate Def folder would be created: {dfolder_name}\nRename one of your Defs."); return
 			dest_folders.add(dfolder_name)
 
 			dfolder = defs_root / dfolder_name
 			dfolder.mkdir(parents=True, exist_ok=True)
 			(dfolder / "tracks.xml").write_text(build_tracks_xml(d), encoding="utf-8", newline="\n")
-			(dfolder / "theme.xml").write_text(build_theme_xml(d, f"{d.label_game} music integrated via the Music Expanded Framework."), encoding="utf-8", newline="\n")
-
-			icon_target = textures_root / f"{d.icon_base}.png"
-			if d.icon_src: shutil.copy2(d.icon_src, icon_target)
-			elif self.modicon_src.get().strip(): shutil.copy2(self.modicon_src.get().strip(), icon_target)
+			(dfolder / "theme.xml").write_text(build_theme_xml(d), encoding="utf-8", newline="\n")
 
 			dest_folder = sounds_root / d.content_folder
 			dest_folder.mkdir(parents=True, exist_ok=True)
@@ -1343,12 +1202,10 @@ class App(tk.Tk):
 		messagebox.showinfo(APP_TITLE, f"Build complete.\n\n{mod_dir}")
 		self._open_folder(mod_dir)
 
-	# ---------- Overwrite (update XMLs in opened mod only)
 	def _overwrite(self):
 		if not self.loaded_mod_dir:
-			messagebox.showerror(APP_TITLE, "Open a MEF mod first (Project → Open MEF Mod Folder…)."); return
-		if not self._preflight_report(overwrite=True): return
-
+			messagebox.showerror(APP_TITLE, "Import a MEF mod first (📥 Import)."); return
+		if not self._preflight_ok(True): return
 		defs_dir = self.loaded_mod_dir / "Defs"
 		if not defs_dir.exists():
 			messagebox.showerror(APP_TITLE, "Opened mod has no Defs/ directory."); return
@@ -1361,10 +1218,39 @@ class App(tk.Tk):
 			target = d._src_def_dir if d._src_def_dir else (defs_dir / (sanitize_simple(d.label_game) or d.content_folder or "Game"))
 			target.mkdir(parents=True, exist_ok=True)
 			(target / "tracks.xml").write_text(build_tracks_xml(d), encoding="utf-8", newline="\n")
-			(target / "theme.xml").write_text(build_theme_xml(d, f"{d.label_game} music integrated via the Music Expanded Framework."), encoding="utf-8", newline="\n")
+			(target / "theme.xml").write_text(build_theme_xml(d), encoding="utf-8", newline="\n")
 
 		messagebox.showinfo(APP_TITLE, f"Overwrite complete.\n\n{self.loaded_mod_dir}")
 		self._open_folder(self.loaded_mod_dir)
+
+	def _update_toolbar_states(self):
+		state = ("normal" if self.loaded_mod_dir else "disabled")
+		try:
+			self.btn_overwr.configure(state=state)
+		except Exception:
+			pass
+
+	# ---------- Misc helpers
+	def _pick_out_root(self):
+		p = filedialog.askdirectory(title="Pick output folder")
+		if p: self.out_root.set(p)
+	def _pick_preview(self):
+		p = filedialog.askopenfilename(title="Pick Preview.png", filetypes=[("PNG","*.png")])
+		if p: self.preview_src.set(p)
+	def _pick_modicon(self):
+		p = filedialog.askopenfilename(title="Pick modicon.png", filetypes=[("PNG","*.png")])
+		if p: self.modicon_src.set(p)
+	def _curdef(self) -> ProjectDef|None:
+		idx = self.cur_def_idx.get()
+		return self.defs[idx] if 0 <= idx < len(self.defs) else None
+	def _open_folder(self, path: Path|None):
+		if not path: return
+		try:
+			if sys.platform.startswith("win"): os.startfile(path)        # type: ignore
+			elif sys.platform == "darwin": subprocess.run(["open", str(path)], check=False)
+			else: subprocess.run(["xdg-open", str(path)], check=False)
+		except Exception:
+			pass
 
 # ---------------- Run ----------------
 if __name__ == "__main__":
