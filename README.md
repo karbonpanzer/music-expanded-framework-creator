@@ -1,15 +1,3 @@
-# MEF Builder (v2.7.4)
-
-GUI tool to **author, preview, and export** RimWorld **Music Expanded Framework** (MEF) mods without hand-editing XML.  
-Builds correct **About**, **Defs/<Game>/tracks.xml**, **Defs/<Game>/theme.xml**, **Textures/UI/Icons**, and **Sounds/MusicExpanded/<Game>** structures, with live previews and guardrails.
-
-> **Heads-up:** This app is a Python/Tkinter program. **You must have Python installed to run the `.py` script.**  
-> • **Windows/macOS:** install Python from https://www.python.org/ (Tkinter is bundled).  
-> • **Linux:** install `python3` **and** `python3-tk`.  
-> If you don’t want that, package it as a standalone **.exe** (see **Build a binary** below).
-
----
-
 ## Highlights
 
 - **End-to-end MEF authoring**
